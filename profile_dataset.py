@@ -3,6 +3,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, min, max, countDistinct, input_file_name
 from schemas.f1 import f1_schema
 from pathlib import Path
+from schemas.f1 import f1_schema, households_schema
 
 def main():
     spark = SparkSession.builder \
@@ -64,6 +65,26 @@ def main():
     
     print(f"\nValor Mínimo de energía: {min_max['min_energy']}")
     print(f"Valor Máximo de energía: {min_max['max_energy']}")
+
+    # F) Subconjunto de desarrollo (Primeros 200 LCLid)
+    print("\n--- Subconjunto de Desarrollo ---")
+    ruta_households = os.path.join(carpeta_raw, "informations_households.csv")
+    
+    df_households = spark.read.csv(
+        ruta_households,
+        header=True,
+        schema=households_schema
+    )
+
+    # Ordenar alfabéticamente por LCLid y tomar los primeros 200
+    dev_households = df_households.orderBy("LCLid").limit(200)
+
+    # Identificar en qué archivos (bloques) están estos 200 hogares
+    bloques_necesarios = dev_households.select("file").distinct().collect()
+
+    print("Los primeros 200 LCLid se encuentran exclusivamente en los siguientes bloques:")
+    for fila in bloques_necesarios:
+        print(fila['file'])
 
     spark.stop()
 
