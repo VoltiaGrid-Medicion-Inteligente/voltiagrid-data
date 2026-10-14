@@ -1,11 +1,10 @@
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+from pyspark.sql.types import DateType, DecimalType, StringType, StructField, StructType
 
-# Esquema para el calendario tarifario F7
-f7_schema = StructType([
-    StructField("valid_from", StringType(), False),
-    StructField("valid_to", StringType(), False),
+F7_SCHEMA = StructType([
+    StructField("valid_from", DateType(), False),
+    StructField("valid_to", DateType(), False),
     StructField("start_time", StringType(), False),
     StructField("end_time", StringType(), False),
-    StructField("band", StringType(), False),
-    StructField("price_kwh", DoubleType(), False)
+    StructField("band_name", StringType(), False),
+    StructField("price_per_kwh", DecimalType(10, 4), False),
 ])
