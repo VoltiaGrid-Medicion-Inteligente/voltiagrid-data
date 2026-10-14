@@ -7,12 +7,12 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import NumericType, StructType
 
+from dev_subset import DEV_SUBSET_FILE, load_dev_blocks, select_files
 from schemas.f1 import F1_SCHEMA, HOUSEHOLDS_SCHEMA
 from schemas.f2 import F2_SCHEMA
 from schemas.header_check import assert_header
 
 ENERGY = "energy(kWh/hh)"
-DEV_HOUSEHOLDS = 200
 
 
 def block_number(path: Path) -> int:
@@ -121,17 +121,6 @@ def profile_f2(spark: SparkSession, files: dict) -> dict:
     }
 
 
-def dev_subset(households: DataFrame, n: int) -> dict:
-    """First n LCLid in alphabetical order and the blocks that contain them."""
-    chosen = households.orderBy("LCLid").limit(n)
-    blocks = sorted({r["file"] for r in chosen.select("file").distinct().collect()},
-                    key=lambda b: block_number(Path(f"{b}.csv")))
-    first_last = chosen.agg(F.min("LCLid").alias("first"), F.max("LCLid").alias("last")).first()
-    return {"n": n, "blocks": blocks, "first": first_last["first"], "last": first_last["last"]}
-
-
-# ---------- report ----------
-
 def schema_table(schema: StructType) -> list[str]:
     lines = ["| Column | Spark type | Nullable |", "|---|---|---|"]
     lines += [f"| `{f.name}` | {f.dataType.simpleString()} | {f.nullable} |" for f in schema.fields]
@@ -146,7 +135,7 @@ def nulls_table(nulls: dict, rows: int) -> list[str]:
     return lines
 
 
-def build_report(f1: dict, hh: dict, f2: dict, dev: dict) -> str:
+def build_report(f1: dict, hh: dict, f2: dict, dev_blocks: list[str] | None) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lo, avg, hi = f1["rows_per_block"]
     lines = [
@@ -206,27 +195,35 @@ def build_report(f1: dict, hh: dict, f2: dict, dev: dict) -> str:
         "",
         "## Development subset",
         "",
-        f"The first {dev['n']} households in alphabetical order (`{dev['first']}` to `{dev['last']}`) "
-        f"are stored in these blocks: {', '.join(f'`{b}`' for b in dev['blocks'])}.",
-        "",
-        "T-03.3 documents why this subset is representative and how to load only these blocks.",
+        (
+            f"This report covers only the development subset: {', '.join(f'`{b}`' for b in dev_blocks)}. "
+            "See `docs/data/dev-subset.md`."
+            if dev_blocks
+            else "The development subset (a few complete blocks) is described in `docs/data/dev-subset.md`; "
+            "`python profile_dataset.py --dev` profiles only those blocks."
+        ),
         "",
     ]
     return "\n".join(lines)
 
 
-# ---------- main ----------
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Profile F1 and F2")
     parser.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
-    parser.add_argument("--output", type=Path, default=Path("docs/data/profile.md"))
-    parser.add_argument("--dev-households", type=int, default=DEV_HOUSEHOLDS)
+    parser.add_argument("--output", type=Path, default=None,
+                        help="default: docs/data/profile.md, or docs/data/profile-dev.md with --dev")
+    parser.add_argument("--dev", action="store_true", help=f"read only the blocks in {DEV_SUBSET_FILE}")
     parser.add_argument("--driver-memory", default="4g")
     args = parser.parse_args()
 
     files = find_files(args.raw_dir)
     print(f"F1 blocks found: {len(files['blocks'])}")
+    dev_blocks = None
+    if args.dev:
+        dev_blocks = load_dev_blocks()
+        files["blocks"] = select_files(files["blocks"], dev_blocks)
+        print(f"Dev subset: reading only {len(files['blocks'])} blocks")
+    output = args.output or Path("docs/data/profile-dev.md" if args.dev else "docs/data/profile.md")
 
     spark = (
         SparkSession.builder.appName("voltiagrid-profile-f1-f2")
@@ -238,17 +235,16 @@ def main() -> None:
     spark.sparkContext.setLogLevel("WARN")
     try:
         f1, _ = profile_f1(spark, files)
-        hh, households = profile_households(spark, files)
+        hh, _ = profile_households(spark, files)
         f2 = profile_f2(spark, files)
-        dev = dev_subset(households, args.dev_households)
     finally:
         spark.stop()
 
-    report = build_report(f1, hh, f2, dev)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(report, encoding="utf-8")
+    report = build_report(f1, hh, f2, dev_blocks)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report, encoding="utf-8")
     print(report)
-    print(f"Report written to {args.output}")
+    print(f"Report written to {output}")
 
 
 if __name__ == "__main__":
