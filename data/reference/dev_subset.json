@@ -1,0 +1,11 @@
+{
+  "blocks": [
+    "block_7",
+    "block_11",
+    "block_52",
+    "block_86"
+  ],
+  "households": 200,
+  "min_share": 0.01,
+  "min_households": 200
+}
