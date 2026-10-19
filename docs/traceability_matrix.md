@@ -1,6 +1,6 @@
 # Traceability matrix (US-05)
 
-Every business rule of the brief (RN-01 to RN-11) points to the module that implements it and to its test in `tests/rules/test_acceptance.py`. Acceptance criteria CA-01 to CA-10 are the scenarios those tests check.
+Every business rule of the brief (RN-01 to RN-11) points to the module that implements it and to its test in `tests/rules/test_acceptance.py`. Acceptance criteria CA-01 to CA-10 are the scenarios those tests check. RN-11 / CA-10 is an API rule, so its test lives in `voltiagrid-api`.
 
 Pending tests are marked `xfail(strict=True)`. When a rule is implemented, its test passes, strict mode reports it as a failure (XPASS), and the `xfail` mark is removed. Update the **Status** column in the same PR.
 
@@ -18,7 +18,7 @@ Pending tests are marked `xfail(strict=True)`. When a rule is implemented, its t
 | RN-08 | Demand-response event if forecast temperature > 30 °C and projected load > 85% of circuit capacity; max 3 h, peak band only                              | CA-06 | `pipeline.demand_response`  | `test_ca_06_event_only_when_both_conditions_and_max_3_hours`                                       | Pending                                            |
 | RN-09 | Saving = baseline (same intervals of the previous 5 working days without event) − actual; incentive only if saving ≥ 10%                                 | CA-07 | `pipeline.demand_response`  | `test_ca_07_no_incentive_with_8_pct_saving_incentive_with_11_pct`                                  | Pending                                            |
 | RN-10 | A customer can take part in at most 8 events per month                                                                                                   | —     | `pipeline.demand_response`  | `test_rn_10_customer_participates_in_at_most_8_events_per_month`                                   | Pending                                            |
-| RN-11 | A customer's interval data can only be read by that customer and authorized areas                                                                        | CA-10 | voltiagrid-api (US-12)      | `test_ca_10_customer_cannot_read_another_customers_consumption` (replaced by the API test, T-12.4) | Pending                                            |
+| RN-11 | A customer's interval data can only be read by that customer and authorized areas | CA-10 | voltiagrid-api `ConsumptionService` (US-13) | voltiagrid-api `tests/test_ca10_isolation.py::test_ca_10_customer_cannot_read_another_customers_consumption` | **Implemented** |
 
 ## Acceptance criteria without a business rule
 
@@ -29,6 +29,6 @@ Pending tests are marked `xfail(strict=True)`. When a rule is implemented, its t
 
 ## Coverage check
 
-- CA-01 to CA-10: one test each (10 tests).
+- CA-01 to CA-10: one test each (10 tests): nine here and CA-10 in `voltiagrid-api`.
 - RN-01 to RN-11: every rule points to a module and a test; RN-05 and RN-10 have their own tests because the brief gives them no CA.
 - Fixtures for the scenarios are in `tests/rules/conftest.py`.
