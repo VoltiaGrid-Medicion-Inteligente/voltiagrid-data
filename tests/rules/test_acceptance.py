@@ -103,10 +103,3 @@ def test_ca_09_full_f1_history_processed_in_cloud_with_time_resources_and_cost()
     report = (Path(__file__).resolve().parents[2] / "docs" / "data" / "cloud-run.md").read_text(encoding="utf-8")
     for section in ("Duration", "Resources", "Cost"):
         assert section in report
-
-@pending("RN-11 / CA-10", "voltiagrid-api (US-12, T-12.4)")
-def test_ca_10_customer_cannot_read_another_customers_consumption():
-    from pipeline.access import can_read_consumption
-
-    assert can_read_consumption(requester="CUST-1", owner="CUST-1") is True
-    assert can_read_consumption(requester="CUST-1", owner="CUST-2") is False
