@@ -31,6 +31,7 @@ def partition(source: str, dataset: str, ingest_date: str) -> str:
 
 
 def plan(raw_dir: Path, ingest_date: str, dev_blocks: list[str] | None = None) -> list[Upload]:
+    """Every file to upload with its key. Raises if a dataset is missing."""
     uploads = []
     for pattern, source, dataset in DATASETS:
         found = sorted(raw_dir.rglob(pattern), key=lambda p: (block_number(p.name), p.name))
@@ -47,6 +48,7 @@ def plan(raw_dir: Path, ingest_date: str, dev_blocks: list[str] | None = None) -
 
 
 def manifests(uploads: list[Upload], started: datetime, finished: datetime, loaded_by: str) -> dict[str, dict]:
+    """One manifest per partition, keyed by the manifest object key."""
     out: dict[str, dict] = {}
     for u in uploads:
         prefix = u.key.rsplit("/", 1)[0]
@@ -67,6 +69,7 @@ def manifests(uploads: list[Upload], started: datetime, finished: datetime, load
 
 
 def remote_size(client, bucket: str, key: str) -> int | None:
+    """Size of the object in S3, or None if it does not exist."""
     try:
         return client.head_object(Bucket=bucket, Key=key)["ContentLength"]
     except Exception as exc:  # botocore ClientError; other errors must stop the load
@@ -77,6 +80,7 @@ def remote_size(client, bucket: str, key: str) -> int | None:
 
 
 def upload_all(client, bucket: str, uploads: list[Upload], config=None, log=print) -> dict:
+    """Uploads every file not already in the bucket with the same size. Returns counters."""
     stats = {"uploaded": 0, "skipped": 0, "bytes": 0}
     for i, u in enumerate(uploads, start=1):
         tag = f"[{i}/{len(uploads)}] {u.path.name} ({u.size / MB:,.1f} MB)"
