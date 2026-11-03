@@ -52,18 +52,16 @@ python -m jobs.clean_report --lake ../voltiagrid-api/lake
 
 | Source | Flag | Rows | Share |
 |---|---|---|---|
-| f1 | `ok` | 5,951,439 | 100.00% |
-| f1 | `invalid_clock` | 199 | 0.00% |
-
+| f1 | ok | 5,951,439 | 99.997% |
+| f1 | invalid_clock | 199 | 0.003% |
 
 | Check | Value |
 |---|---|
 | Rows | 5,951,638 |
-| Valid readings | 100.00% |
 | Duplicates (meter + interval) | 0 |
 | Dates | 829 (2011-11-23 to 2014-02-28) |
 | Meters | 200 |
-| Run time and laptop | 267.1 s|
+| Run time and laptop | <s> s, <CPU, RAM> |
 
 ## Findings and decisions
 
