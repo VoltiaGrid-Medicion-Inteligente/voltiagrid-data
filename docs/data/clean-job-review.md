@@ -61,7 +61,7 @@ python -m jobs.clean_report --lake ../voltiagrid-api/lake
 | Duplicates (meter + interval) | 0 |
 | Dates | 829 (2011-11-23 to 2014-02-28) |
 | Meters | 200 |
-| Run time and laptop | <s> s, <CPU, RAM> |
+| Run time and laptop | 212 s, AMD Ryzen 5 5500U, 8 GB RAM |
 
 ## Findings and decisions
 
