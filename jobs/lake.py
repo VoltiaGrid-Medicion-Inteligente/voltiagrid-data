@@ -81,3 +81,25 @@ def read_text(spark, path: str) -> str:
         return "\n".join(lines)
     finally:
         reader.close()
+
+
+# ---------- which reading dates a job processes ----------
+
+def add_date_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--date", action="append", default=None, metavar="YYYY-MM-DD",
+                       help="reading date to process (repeat for several)")
+    group.add_argument("--run", default=None,
+                       help="process the dates touched by this cleaning run (manifest in clean/.../_runs/)")
+
+
+def dates_from_args(spark, args: argparse.Namespace, lake: Lake) -> list[str]:
+    """Reading dates as YYYY-MM-DD strings, from --date or from the manifest of a cleaning run."""
+    import json
+
+    if args.date:
+        return sorted(set(args.date))
+    manifest = f"{lake.clean('readings', 'interval_30min')}/_runs/{args.run}.json"
+    if not path_exists(spark, manifest):
+        raise SystemExit(f"run manifest not found: {manifest}")
+    return sorted(json.loads(read_text(spark, manifest))["dates"])
