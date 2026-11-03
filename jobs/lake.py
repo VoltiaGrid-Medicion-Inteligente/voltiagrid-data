@@ -43,3 +43,41 @@ def add_lake_arguments(parser: argparse.ArgumentParser) -> None:
 def lake_from_args(args: argparse.Namespace) -> Lake:
     local = Lake.local(args.lake)
     return Lake(args.raw or local.raw_root, args.clean or local.clean_root, args.curated or local.curated_root)
+
+
+# ---------- small files next to the data (manifests, _SUCCESS), on a local folder or S3 ----------
+
+def _filesystem(spark, path: str):
+    jvm = spark.sparkContext._jvm
+    hadoop_path = jvm.org.apache.hadoop.fs.Path(path)
+    return hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration()), hadoop_path
+
+
+def path_exists(spark, path: str) -> bool:
+    fs, hadoop_path = _filesystem(spark, path)
+    return fs.exists(hadoop_path)
+
+
+def write_text(spark, path: str, text: str) -> None:
+    fs, hadoop_path = _filesystem(spark, path)
+    stream = fs.create(hadoop_path, True)
+    try:
+        stream.write(bytearray(text.encode("utf-8")))
+    finally:
+        stream.close()
+
+
+def read_text(spark, path: str) -> str:
+    fs, hadoop_path = _filesystem(spark, path)
+    stream = fs.open(hadoop_path)
+    reader = spark.sparkContext._jvm.java.io.BufferedReader(
+        spark.sparkContext._jvm.java.io.InputStreamReader(stream, "UTF-8"))
+    try:
+        lines = []
+        line = reader.readLine()
+        while line is not None:
+            lines.append(line)
+            line = reader.readLine()
+        return "\n".join(lines)
+    finally:
+        reader.close()
