@@ -23,3 +23,20 @@ layout* page of voltiagrid-docs (`jobs/lake.py`).
 - F3 files are read recursively under an `ingest_date=` folder, so every `ingest_hour=` inside it is included.
 
 Locally the lake is the `lake/` folder of voltiagrid-api, where the F3 consumer writes (`--lake ../voltiagrid-api/lake`).
+
+## 2. Normalize the clock, ±5 minutes (US-30, T-30.2, RN-01)
+
+`jobs/clean_readings.py`, `normalize_clock`. Each reading moves to the nearest `:00` or `:30` if it is at most
+5 minutes away (5:00 exactly still counts); otherwise it keeps `interval_start = null` and `clock_ok = false`.
+
+| Reading at | `interval_start` | `clock_ok` |
+|---|---|---|
+| 10:33 | 10:30 | true |
+| 10:27 | 10:30 | true |
+| 10:35:00 | 10:30 | true |
+| 10:35:01 | null | false |
+| 10:41 | null | false (CA-01) |
+| 23:57 | 00:00 of the next day | true |
+
+The arithmetic is done on epoch seconds (`unix_timestamp`, session time zone UTC), so it is exact, crosses midnight
+and month ends without special cases, and never depends on the machine's time zone.
