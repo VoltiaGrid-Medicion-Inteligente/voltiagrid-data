@@ -156,3 +156,29 @@ given. `circuit_capacity` returns one row per circuit with `capacity_kva` (kVA),
 capacities.
 
 With the dev seed (`MODE=dev`): 200 meters, 4 transformers, 1 circuit of 2,100.12 kVA.
+
+## 6. Circuit load as a share of capacity (US-33, T-33.1)
+
+`jobs/circuit_load.py`. For each circuit and 30-minute interval:
+
+```
+energy_kwh = sum of the valid clean readings of the circuit's meters (F4: meter -> transformer -> circuit)
+load_kw    = energy_kwh x 2                     (average power over 30 minutes)
+load_pct   = load_kw / capacity_kva             (capacity from F4; power factor 1)
+is_overloaded = load_pct > 0.85                 (exactly 85% is not overloaded; same threshold as RN-08)
+```
+
+Output: `curated/dataset=circuit_load/date=YYYY-MM-DD/` with `circuit_code`, `interval_start`, `energy_kwh`,
+`load_kw`, `capacity_kva`, `load_pct`, `is_overloaded`, `meters_reporting`, `meters_total`.
+`meters_reporting` below `meters_total` means some readings were missing or invalid in that interval, so the load is
+a lower bound until the gaps are estimated (US-34).
+
+Every job after cleaning chooses its dates the same way (`jobs/lake.py`): `--date YYYY-MM-DD` (repeatable) or
+`--run <run>`, the dates a cleaning run touched.
+
+```powershell
+python -m jobs.circuit_load --run f3-2026-11-02 --lake ../voltiagrid-api/lake
+```
+
+Reference run (dev seed, 35 days of simulated F3): 1,680 circuit-intervals in 36 dates, peak 7.0% of the 2,100 kVA
+circuit, none above 85%. With 200 households on a circuit sized for thousands, overload only appears in the tests.
