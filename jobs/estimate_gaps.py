@@ -17,7 +17,6 @@ from jobs.clean_readings import clean_path
 from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
 from jobs.spark import get_spark
 
-
 INTERVALS_PER_DAY = 48
 MAX_INTERPOLATED_INTERVALS = 4  # RN-03: gaps up to 2 hours
 FILLED_COLUMNS = ["meter_id", "interval_start", "energy_kwh", "is_estimated", "estimation_method",
@@ -64,8 +63,6 @@ def complete_grid(clean_rows: DataFrame, grid_from: date, grid_to: date) -> Data
     )
 
 
-
-
 def interpolate(grid: DataFrame) -> DataFrame:
     """RN-03, first part (T-34.2): a gap of up to 4 intervals (2 hours) with a valid reading on both sides is filled
     on the straight line between them. Adds `interpolated_kwh` (null when the gap is longer or open at one end).
@@ -109,7 +106,9 @@ def fill_gaps(clean_rows: DataFrame, days: list) -> DataFrame:
         .withColumn("is_estimated", F.col("estimation_method").isNotNull())
         .withColumn("date", F.to_date("interval_start"))
         .filter(F.col("date").isin(days))
+        .select(FILLED_COLUMNS)
     )
+
 
 def history_window(days: list[date]) -> tuple[date, date]:
     """Clean dates a run needs: 28 days before the first day (profile, T-34.3) to the day after the last one."""
