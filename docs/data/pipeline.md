@@ -207,3 +207,22 @@ A meter's grid starts on the first day it has a reading with a valid clock, so a
 before it existed. A meter that sent nothing on a day still gets its 48 intervals (a missing day, defect of US-02).
 
 The job reads clean from 28 days before the first date (the profile of T-34.3 needs them) to the day after the last.
+
+### 7.2 Linear interpolation, gaps up to 2 hours (T-34.2)
+
+`interpolate`: a gap of **up to 4 intervals** (2 hours) with a valid reading on both sides is filled on the straight
+line between them, rounded to 4 decimals, with `is_estimated = true` and `estimation_method = 'interpolation'`.
+
+How it is found, with windows per meter ordered by time (gaps and islands):
+
+```
+_pos       = row_number()                                 position in the grid
+_prev_pos  = last(position of a valid reading) up to here     _prev_kwh = its value
+_next_pos  = first(position of a valid reading) from here     _next_kwh = its value
+gap length = _next_pos - _prev_pos - 1
+estimate   = _prev_kwh + (_next_kwh - _prev_kwh) x (_pos - _prev_pos) / (_next_pos - _prev_pos)
+```
+
+Example: 0.2 at 4:30, nothing at 5:00, 5:30 and 6:00, 0.6 at 6:30 → 0.3, 0.4, 0.5. The grid includes the day before and
+the day after, so a gap that crosses midnight is measured and interpolated with the readings on both sides. A gap
+longer than 2 hours, or with no valid reading on one side (the end of the data), is left for the profile (T-34.3).
