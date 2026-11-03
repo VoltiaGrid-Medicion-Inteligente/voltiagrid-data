@@ -1,4 +1,3 @@
-import shutil
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -43,24 +42,12 @@ def test_every_band_has_a_positive_price(rows):
     assert all(r.price_per_kwh > 0 for r in rows)
 
 
-def test_spark_reads_csv_with_explicit_schema():
-    pyspark = pytest.importorskip("pyspark")
-    if shutil.which("java") is None:
-        pytest.skip("Java is not installed")
+def test_spark_reads_csv_with_explicit_schema(spark):
     from schemas.f7 import F7_SCHEMA
 
-    spark = (
-        pyspark.sql.SparkSession.builder.master("local[1]")
-        .appName("test-f7-schema")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
-    )
-    try:
-        df = spark.read.csv(str(CSV_PATH), header=True, schema=F7_SCHEMA, mode="FAILFAST")
-        data = df.collect()
-        loaded_types = [(f.name, f.dataType) for f in df.schema.fields]
-    finally:
-        spark.stop()
+    df = spark.read.csv(str(CSV_PATH), header=True, schema=F7_SCHEMA, mode="FAILFAST")
+    data = df.collect()
+    loaded_types = [(f.name, f.dataType) for f in df.schema.fields]
 
     assert loaded_types == [(f.name, f.dataType) for f in F7_SCHEMA.fields]
     assert len(data) == len(load_tariffs(CSV_PATH))
