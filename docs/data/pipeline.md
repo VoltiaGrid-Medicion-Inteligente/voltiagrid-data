@@ -40,3 +40,24 @@ Locally the lake is the `lake/` folder of voltiagrid-api, where the F3 consumer 
 
 The arithmetic is done on epoch seconds (`unix_timestamp`, session time zone UTC), so it is exact, crosses midnight
 and month ends without special cases, and never depends on the machine's time zone.
+
+## 3. Remove duplicates with a window (US-30, T-30.3, RN-02)
+
+`deduplicate`, after `normalize_clock`, in two passes:
+
+1. **Exact copies** (same meter, source, original time, sequence and value) become one row. They come from
+   redeliveries: the consumer may store a message twice after a crash (ADR-007, `voltiagrid-api/docs/INGESTION.md`).
+   This is what guarantees *no duplicates by meter + interval + sequence* (US-29).
+2. **RN-02**: `row_number()` over a window partitioned by `meter_id, interval_start`, ordered by `seq` descending.
+   Only row 1 stays. The highest sequence wins even if its value is null; the quality step flags it and the gap is
+   estimated later (US-34). Ties (F1 has no sequence) go to the latest original time and then the highest value
+   text, so the result never depends on how Spark split the data.
+
+Readings with an invalid clock have no interval: they skip pass 2 and stay, flagged, for the quality report.
+
+| Input | Kept |
+|---|---|
+| `MAC000002` 10:30, 0.20, seq 1 and 10:30, 0.30, seq 2 | 0.30, seq 2 (CA-02) |
+| 10:28, seq 5 and 10:31, seq 3 (both normalize to 10:30) | seq 5 |
+| 10:30, 0.30, seq 3 and 10:30, null, seq 5 | null, seq 5 |
+| The same reading three times | one |
