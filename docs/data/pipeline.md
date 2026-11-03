@@ -186,3 +186,24 @@ circuit, none above 85%. With 200 households on a circuit sized for thousands, o
 Tests (`tests/test_circuit_load.py`, T-33.3): 85.00% is not overloaded and 85.02% is; invalid readings add no load;
 meters missing from F4 are left out; one row per circuit and interval; and the whole job reads the dates of a
 cleaning run, joins F4 and writes `curated/dataset=circuit_load` with `_SUCCESS` per date.
+
+## 7. Estimate gaps (US-34, RN-03)
+
+`jobs/estimate_gaps.py` writes `clean/source=readings/dataset=interval_30min_filled/date=YYYY-MM-DD/`: exactly
+**48 rows per meter and day**, the valid reading when there is one and an estimate otherwise.
+
+### 7.1 Full interval grid (T-34.1)
+
+A gap is an interval with no row at all (the meter did not report) or with a flagged reading (null, negative, out of
+range). To find them, `complete_grid` builds every interval of every meter (`sequence` of 30-minute steps,
+`explode`) and left-joins the clean readings:
+
+| Column | Meaning |
+|---|---|
+| `actual_kwh` | the valid reading, or null (gap) |
+| `quality_flag` | the clean flag, or `missing` when the meter sent nothing for that interval |
+
+A meter's grid starts on the first day it has a reading with a valid clock, so a new meter is not estimated for days
+before it existed. A meter that sent nothing on a day still gets its 48 intervals (a missing day, defect of US-02).
+
+The job reads clean from 28 days before the first date (the profile of T-34.3 needs them) to the day after the last.
