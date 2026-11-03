@@ -10,7 +10,7 @@ the valid reading when there is one, otherwise an estimate flagged with its meth
 import argparse
 from datetime import date, datetime, timedelta
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 from jobs.clean_readings import clean_path
@@ -18,6 +18,7 @@ from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_a
 from jobs.spark import get_spark
 
 INTERVALS_PER_DAY = 48
+MAX_INTERPOLATED_INTERVALS = 4  # RN-03: gaps up to 2 hours
 FILLED_COLUMNS = ["meter_id", "interval_start", "energy_kwh", "is_estimated", "estimation_method",
                   "quality_flag", "date"]
 
@@ -62,14 +63,47 @@ def complete_grid(clean_rows: DataFrame, grid_from: date, grid_to: date) -> Data
     )
 
 
+def interpolate(grid: DataFrame) -> DataFrame:
+    """RN-03, first part (T-34.2): a gap of up to 4 intervals (2 hours) with a valid reading on both sides is filled
+    on the straight line between them. Adds `interpolated_kwh` (null when the gap is longer or open at one end).
+
+    Gaps-and-islands with windows: for each interval, the position and value of the last valid reading before it
+    and the first after it. Gap length = next position - previous position - 1.
+    """
+    by_meter = Window.partitionBy("meter_id").orderBy("interval_start")
+    before = by_meter.rowsBetween(Window.unboundedPreceding, 0)
+    after = by_meter.rowsBetween(0, Window.unboundedFollowing)
+    has_value = F.col("actual_kwh").isNotNull()
+    positioned = (
+        grid.withColumn("_pos", F.row_number().over(by_meter))
+        .withColumn("_prev_pos", F.last(F.when(has_value, F.col("_pos")), ignorenulls=True).over(before))
+        .withColumn("_prev_kwh", F.last("actual_kwh", ignorenulls=True).over(before))
+        .withColumn("_next_pos", F.first(F.when(has_value, F.col("_pos")), ignorenulls=True).over(after))
+        .withColumn("_next_kwh", F.first("actual_kwh", ignorenulls=True).over(after))
+    )
+    gap_length = F.col("_next_pos") - F.col("_prev_pos") - 1
+    line = F.col("_prev_kwh") + (F.col("_next_kwh") - F.col("_prev_kwh")) * (
+        (F.col("_pos") - F.col("_prev_pos")) / (F.col("_next_pos") - F.col("_prev_pos")))
+    return positioned.withColumn(
+        "interpolated_kwh",
+        F.when(~has_value & (gap_length <= MAX_INTERPOLATED_INTERVALS), F.round(line, 4)),
+    ).drop("_pos", "_prev_pos", "_prev_kwh", "_next_pos", "_next_kwh")
+
+
 def fill_gaps(clean_rows: DataFrame, days: list) -> DataFrame:
-    """Rows for the given days (FILLED_COLUMNS). clean_rows must cover the days and the 28 days before them."""
+    """Rows for the given days (FILLED_COLUMNS). clean_rows must cover the days and the 28 days before them.
+
+    The grid also covers the day before and the day after, so a gap that crosses midnight is measured and
+    interpolated with the readings on both sides.
+    """
     days = as_dates(days)
-    grid = complete_grid(clean_rows, days[0], days[-1])
+    grid = complete_grid(clean_rows, days[0] - timedelta(days=1), days[-1] + timedelta(days=1))
+    filled = interpolate(grid)
+    method = F.when(F.col("interpolated_kwh").isNotNull(), F.lit("interpolation"))
     return (
-        grid.withColumn("energy_kwh", F.col("actual_kwh"))
-        .withColumn("is_estimated", F.col("actual_kwh").isNull())
-        .withColumn("estimation_method", F.lit(None).cast("string"))
+        filled.withColumn("energy_kwh", F.coalesce("actual_kwh", "interpolated_kwh"))
+        .withColumn("estimation_method", method)
+        .withColumn("is_estimated", F.col("estimation_method").isNotNull())
         .withColumn("date", F.to_date("interval_start"))
         .filter(F.col("date").isin(days))
         .select(FILLED_COLUMNS)
