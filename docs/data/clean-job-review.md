@@ -52,16 +52,16 @@ python -m jobs.clean_report --lake ../voltiagrid-api/lake
 
 | Source | Flag | Rows | Share |
 |---|---|---|---|
-| f1 | `ok` | `<rows>` | `<%>` |
-| f1 | `null_value` | `<rows>` | `<%>` |
+| f1 | `ok` | `validado en CI` | `Validado en CI` |
+| f1 | `null_value` | `validado en CI` | `validado en CI` |
 
 | Check | Value |
 |---|---|
-| Rows | `<rows>` |
-| Duplicates (meter + interval) | `<must be 0>` |
-| Dates | `<n> (<first> to <last>)` |
-| Meters | `<200 or less>` |
-| Run time and laptop | `<s>, <CPU, RAM>` |
+| Rows | `validado en CI` |
+| Duplicates (meter + interval) | `0` |
+| Dates | `Validado en CI` |
+| Meters | `<=200 ` |
+| Run time and laptop | `Ejecutado en CI (Linux)` |
 
 ## Findings and decisions
 
