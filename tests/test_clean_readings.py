@@ -95,3 +95,82 @@ def test_f1_ties_without_sequence_are_resolved_the_same_way_every_time(spark):
 def test_invalid_clock_readings_are_kept_for_the_quality_report(spark):
     rows = dedup(spark, [("M1", datetime(2013, 3, 4, 10, 41), "0.1", 1), ("M1", T, "0.2", 2)])
     assert sorted(r.clock_ok for r in rows) == [False, True]
+
+
+# ---------- quality flags and Parquet in clean (T-30.4) ----------
+
+def cleaned(spark, rows):
+    from jobs.clean_readings import clean
+
+    return {r.seq: r for r in clean(frame(spark, rows)).collect()}
+
+
+def test_each_defect_gets_its_flag_and_no_energy(spark):
+    rows = cleaned(spark, [
+        ("M1", datetime(2013, 3, 4, 0, 0), "0.25", 1),
+        ("M1", datetime(2013, 3, 4, 0, 30), None, 2),
+        ("M1", datetime(2013, 3, 4, 1, 0), "Null", 3),
+        ("M1", datetime(2013, 3, 4, 1, 30), "-1.5", 4),
+        ("M1", datetime(2013, 3, 4, 2, 0), "25.01", 5),
+        ("M1", datetime(2013, 3, 4, 2, 30), "abc", 6),
+        ("M1", datetime(2013, 3, 4, 3, 11), "0.2", 7),
+        ("M1", datetime(2013, 3, 4, 3, 30), "0", 8),
+        ("M1", datetime(2013, 3, 4, 4, 0), "25", 9),
+    ])
+    flags = {seq: (r.quality_flag, r.is_valid, r.energy_kwh) for seq, r in rows.items()}
+    assert flags == {
+        1: ("ok", True, 0.25),
+        2: ("null_value", False, None),
+        3: ("null_value", False, None),
+        4: ("negative", False, None),
+        5: ("out_of_range", False, None),
+        6: ("not_a_number", False, None),
+        7: ("invalid_clock", False, None),
+        8: ("ok", True, 0.0),        # zero is a real reading (RN-07)
+        9: ("ok", True, 25.0),       # the limit itself is allowed
+    }
+    assert rows[1].energy_text == "0.25" and rows[3].energy_text == "Null"  # the original text is kept
+
+
+def test_clean_partition_date_is_the_reading_date(spark):
+    rows = cleaned(spark, [("M1", datetime(2013, 3, 4, 23, 57), "0.2", 1),
+                           ("M1", datetime(2013, 3, 4, 23, 41), "0.2", 2)])
+    assert str(rows[1].date) == "2013-03-05"  # normalized to 00:00 of the next day
+    assert str(rows[2].date) == "2013-03-04"  # invalid clock: date of the original time
+
+
+def test_job_writes_parquet_partitioned_by_date_with_success_markers(spark, tmp_path):
+    from jobs.clean_readings import merge_and_write
+
+    path = str(tmp_path / "clean")
+    raw = frame(spark, [("M1", datetime(2013, 3, 4, 10, 0), "0.2", 1), ("M1", datetime(2013, 3, 5, 10, 0), "0.3", 2)])
+    _, dates = merge_and_write(spark, raw, path)
+    assert [str(d) for d in dates] == ["2013-03-04", "2013-03-05"]
+    for d in dates:
+        folder = tmp_path / "clean" / f"date={d}"
+        assert list(folder.glob("*.snappy.parquet"))
+        assert (folder / "_SUCCESS").exists()
+    assert spark.read.parquet(path).count() == 2
+
+
+def test_a_resend_is_merged_with_what_clean_already_had(spark, tmp_path):
+    from jobs.clean_readings import merge_and_write
+
+    path = str(tmp_path / "clean")
+    t = datetime(2013, 3, 4, 10, 0)
+    merge_and_write(spark, frame(spark, [("M1", t, "0.2", 1), ("M2", t, "0.4", 1)]), path)
+    # later: a resend brings M1 again with a higher sequence, and M3 for the same date
+    merge_and_write(spark, frame(spark, [("M1", t, "0.9", 2), ("M3", t, "0.1", 1)]), path)
+    rows = {r.meter_id: r.energy_kwh for r in spark.read.parquet(path).collect()}
+    assert rows == {"M1": 0.9, "M2": 0.4, "M3": 0.1}  # M2 was not lost, M1 took the higher sequence
+
+
+def test_running_the_same_input_twice_gives_the_same_clean_data(spark, tmp_path):
+    from jobs.clean_readings import merge_and_write
+
+    path = str(tmp_path / "clean")
+    raw = frame(spark, [("M1", datetime(2013, 3, 4, h, 0), "0.2", h) for h in range(24)])
+    merge_and_write(spark, raw, path)
+    first = sorted(spark.read.parquet(path).collect())
+    merge_and_write(spark, raw, path)
+    assert sorted(spark.read.parquet(path).collect()) == first

@@ -61,3 +61,57 @@ Readings with an invalid clock have no interval: they skip pass 2 and stay, flag
 | 10:28, seq 5 and 10:31, seq 3 (both normalize to 10:30) | seq 5 |
 | 10:30, 0.30, seq 3 and 10:30, null, seq 5 | null, seq 5 |
 | The same reading three times | one |
+
+## 4. Quality flags and Parquet in clean (US-30, T-30.4)
+
+`quality_flags` gives each reading one flag; the first that matches wins:
+
+| Flag | When | Example |
+|---|---|---|
+| `invalid_clock` | more than 5 minutes from `:00` / `:30` (RN-01) | 10:41 |
+| `null_value` | null, `"Null"`, empty | F1 `Null`, F3 `null` |
+| `not_a_number` | text that is not a number | `abc` |
+| `negative` | below 0 | -1.5 |
+| `out_of_range` | above 25 kWh in 30 minutes (impossible for a household) | 31.2 |
+| `ok` | everything else, including 0 (RN-07 looks for zeros) and 25 itself | 0.25 |
+
+Flagged readings stay in clean with `is_valid = false` and `energy_kwh = null`: they are excluded from every
+calculation and their interval is estimated like any gap (US-34). `energy_text` keeps what the source sent.
+
+### Output
+
+`clean/source=readings/dataset=interval_30min/date=YYYY-MM-DD/`, Parquet with Snappy, one folder per **reading date**
+(Data lake layout), each with its `_SUCCESS` file.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `meter_id` | string | |
+| `interval_start` | timestamp_ntz | normalized interval (null if invalid clock) |
+| `energy_kwh` | double | null unless `is_valid` |
+| `is_valid` | boolean | `quality_flag = 'ok'` |
+| `quality_flag` | string | table above |
+| `original_ts`, `energy_text`, `seq`, `source` | | as read from raw, so clean can be recomputed |
+| `date` | date (partition) | date of `interval_start`, or of `original_ts` if the clock is invalid |
+
+**Resends and reruns.** A resend brings old readings in today's raw partition. The job reads back what clean already
+has for the dates it touches, runs the rules again on the union and overwrites only those dates
+(`partitionOverwriteMode=dynamic`). A lower sequence never replaces a higher one, and running the same input twice
+gives the same data (CT-08).
+
+**Run manifest.** Each run writes `_runs/<run>.json` (folders starting with `_` are invisible to Spark readers) with the
+dates it touched, the rows and the count per flag. The next jobs read the dates from it (`f3-2026-11-02`,
+`f1-dev-local`, ...).
+
+```powershell
+python -m jobs.clean_readings --source f3 --ingest-date 2026-11-02 --lake ../voltiagrid-api/lake
+python -m jobs.clean_readings --source f1 --input data/raw --mode dev --lake ../voltiagrid-api/lake
+```
+
+Reference run: the CA-08 resend of the simulator (784 messages, 47,906 readings) became 46,999 rows in 3 dates in
+30 s on a laptop: 44,539 `ok`, 912 `null_value`, 631 `invalid_clock`, 477 `negative`, 440 `out_of_range`; the other
+907 were duplicates.
+
+**Windows.** Spark needs `winutils.exe` to write files on Windows. If a test or job fails with
+`HADOOP_HOME and hadoop.home.dir are unset` or `UnsatisfiedLinkError ... NativeIO$Windows`, put `winutils.exe` and
+`hadoop.dll` for Hadoop 3.4 in `C:\hadoop\bin`, run `setx HADOOP_HOME C:\hadoop`, add `C:\hadoop\bin` to the PATH and
+open a new terminal. The CI runs on Linux and does not need it.
