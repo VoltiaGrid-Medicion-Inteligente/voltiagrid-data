@@ -115,3 +115,21 @@ Reference run: the CA-08 resend of the simulator (784 messages, 47,906 readings)
 `HADOOP_HOME and hadoop.home.dir are unset` or `UnsatisfiedLinkError ... NativeIO$Windows`, put `winutils.exe` and
 `hadoop.dll` for Hadoop 3.4 in `C:\hadoop\bin`, run `setx HADOOP_HOME C:\hadoop`, add `C:\hadoop\bin` to the PATH and
 open a new terminal. The CI runs on Linux and does not need it.
+
+## Rules in `pipeline/` and their Spark twin
+
+Each business rule has two implementations that must agree:
+
+| Where | What for | Tested by |
+|---|---|---|
+| `pipeline/<rule>.py` | The rule in plain Python, readable next to the brief; the function each CA calls | `tests/rules/test_acceptance.py` |
+| `jobs/<job>.py` | The same rule on millions of rows in Spark | `tests/test_<job>.py` |
+| both | The job, run on the CA fixture, gives the rule's answer | `tests/rules/test_rules_match_spark.py` |
+
+When a rule is implemented, its acceptance test stops being `xfail` and the **Status** of the traceability matrix
+changes in the same PR.
+
+| Rule | CA | `pipeline` | Spark job | Status |
+|---|---|---|---|---|
+| RN-01 clock ±5 min | CA-01 | `pipeline.cleaning.normalize_clock` | `jobs.clean_readings.normalize_clock` | Implemented (US-30) |
+| RN-02 highest sequence | CA-02 | `pipeline.cleaning.deduplicate` | `jobs.clean_readings.deduplicate` | Implemented (US-30) |

@@ -9,7 +9,6 @@ def pending(rule: str, module: str):
     return pytest.mark.xfail(strict=True, reason=f"{rule}: {PENDING} in {module}")
 
 
-@pending("RN-01 / CA-01", "pipeline.cleaning")
 def test_ca_01_reading_at_10_33_is_normalized_and_10_41_is_invalid_clock():
     from pipeline.cleaning import normalize_clock
 
@@ -18,7 +17,6 @@ def test_ca_01_reading_at_10_33_is_normalized_and_10_41_is_invalid_clock():
     assert invalid_clock is True
 
 
-@pending("RN-02 / CA-02", "pipeline.cleaning")
 def test_ca_02_duplicate_interval_keeps_highest_sequence(duplicated_interval):
     from pipeline.cleaning import deduplicate
 
