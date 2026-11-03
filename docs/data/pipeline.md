@@ -182,3 +182,7 @@ python -m jobs.circuit_load --run f3-2026-11-02 --lake ../voltiagrid-api/lake
 
 Reference run (dev seed, 35 days of simulated F3): 1,680 circuit-intervals in 36 dates, peak 7.0% of the 2,100 kVA
 circuit, none above 85%. With 200 households on a circuit sized for thousands, overload only appears in the tests.
+
+Tests (`tests/test_circuit_load.py`, T-33.3): 85.00% is not overloaded and 85.02% is; invalid readings add no load;
+meters missing from F4 are left out; one row per circuit and interval; and the whole job reads the dates of a
+cleaning run, joins F4 and writes `curated/dataset=circuit_load` with `_SUCCESS` per date.
