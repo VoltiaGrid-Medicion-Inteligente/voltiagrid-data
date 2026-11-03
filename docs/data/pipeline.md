@@ -133,3 +133,26 @@ changes in the same PR.
 |---|---|---|---|---|
 | RN-01 clock ±5 min | CA-01 | `pipeline.cleaning.normalize_clock` | `jobs.clean_readings.normalize_clock` | Implemented (US-30) |
 | RN-02 highest sequence | CA-02 | `pipeline.cleaning.deduplicate` | `jobs.clean_readings.deduplicate` | Implemented (US-30) |
+
+## 5. Network inventory from F4 (US-33, T-33.2)
+
+The inventory (meters, customers, transformers, circuits, contracts) lives in the API database. `jobs/inventory.py`
+copies it to raw once, and every job reads those files with an explicit schema (`schemas/f4.py`) instead of querying
+the database from Spark (no JDBC driver, no load on the operational database).
+
+```powershell
+# voltiagrid-api stack up (make up) so the database has the seed; DATABASE_URL as in voltiagrid-api/.env
+$env:DATABASE_URL = "postgresql+psycopg://voltia:<password>@localhost:5433/voltiagrid"
+python -m jobs.inventory export --lake ../voltiagrid-api/lake
+```
+
+| Dataset (raw) | File | Columns |
+|---|---|---|
+| `source=f4/dataset=meters/ingest_date=YYYY-MM-DD/` | `meters.csv` | `meter_id`, `customer_code`, `transformer_code`, `transformer_capacity_kva`, `circuit_code`, `circuit_capacity_kva` |
+| `source=f4/dataset=contracts/ingest_date=YYYY-MM-DD/` | `contracts.csv` | `customer_code`, `contract_code`, `tariff_type`, `start_date`, `end_date` |
+
+Each partition has its `_manifest.json`. `read_meters` and `read_contracts` take the latest `ingest_date` unless one is
+given. `circuit_capacity` returns one row per circuit with `capacity_kva` (kVA), and fails if F4 gives a circuit two
+capacities.
+
+With the dev seed (`MODE=dev`): 200 meters, 4 transformers, 1 circuit of 2,100.12 kVA.
