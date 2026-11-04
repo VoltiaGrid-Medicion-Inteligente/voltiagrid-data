@@ -116,3 +116,52 @@ def test_meters_are_added_per_transformer_with_their_estimates(spark):
     rows = {r.transformer_code: r for r in metered_by_transformer(filled, meters).collect()}
     assert (rows["TR-1"].metered_kwh, rows["TR-1"].estimated_kwh, rows["TR-1"].meters) == (1.5, 0.5, 2)
     assert rows["TR-2"].metered_kwh == 2.0
+
+
+# ---------- T-37.3: 3 consecutive days above 12% ----------
+
+def losses_frame(spark, by_transformer):
+    """{transformer: [loss_pct per day from 2013-01-01]} -> daily losses (loss_kwh = loss_pct x 100)."""
+    rows = []
+    for code, pcts in by_transformer.items():
+        for i, pct in enumerate(pcts):
+            if pct is not None:
+                rows.append((code, 100.0, 100.0 * (1 - pct), 100.0 * pct, pct, date(2013, 1, 1) + timedelta(days=i)))
+    return spark.createDataFrame(rows, "transformer_code string, delivered_kwh double, metered_kwh double, "
+                                       "loss_kwh double, loss_pct double, date date")
+
+
+def suspicious_days(spark, by_transformer):
+    from jobs.transformer_losses import suspicious_transformers
+
+    return sorted((r.transformer_code, r.date.day, r.streak_days)
+                  for r in suspicious_transformers(losses_frame(spark, by_transformer)).collect())
+
+
+def test_ca_05_15_percent_for_3_days_after_a_normal_day_is_suspicious_on_the_third(spark):
+    assert suspicious_days(spark, {"TR-00001": [0.05, 0.15, 0.15, 0.15]}) == [("TR-00001", 4, 3)]
+
+
+def test_two_days_are_not_enough_and_a_normal_day_resets_the_streak(spark):
+    assert suspicious_days(spark, {"TR-1": [0.15, 0.15, 0.05, 0.15, 0.15]}) == []
+
+
+def test_exactly_12_percent_is_not_above_the_threshold(spark):
+    assert suspicious_days(spark, {"TR-1": [0.12, 0.12, 0.12]}) == []
+
+
+def test_a_day_without_data_breaks_the_streak(spark):
+    assert suspicious_days(spark, {"TR-1": [0.2, 0.2, None, 0.2]}) == []
+
+
+def test_the_streak_keeps_counting_while_the_loss_continues(spark):
+    assert suspicious_days(spark, {"TR-1": [0.13, 0.13, 0.13, 0.13]}) == [("TR-1", 3, 3), ("TR-1", 4, 4)]
+
+
+def test_suspicious_transformers_are_ranked_by_energy_lost(spark):
+    from jobs.transformer_losses import suspicious_transformers
+
+    losses = losses_frame(spark, {"TR-A": [0.13, 0.13, 0.13], "TR-B": [0.30, 0.30, 0.30], "TR-C": [0.2, 0.2, 0.2]})
+    rows = suspicious_transformers(losses).orderBy("rank").collect()
+    assert [(r.rank, r.transformer_code, r.streak_loss_kwh) for r in rows] == [
+        (1, "TR-B", 90.0), (2, "TR-C", 60.0), (3, "TR-A", 39.0)]
