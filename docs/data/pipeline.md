@@ -251,3 +251,11 @@ python -m jobs.estimate_gaps --run f3-2026-11-02 --lake ../voltiagrid-api/lake
 
 Reference run (dev seed, 2013-02-04, 200 meters): 9,600 rows, 8,846 real, 651 interpolated, 103 by profile (7.9%
 estimated, consistent with `DEFECT_RATE=0.02` for gaps, missing days, nulls, out-of-range values and skewed clocks).
+
+CA-03 is enabled (T-34.4): `pipeline.estimation.fill_gaps` is the rule in plain Python and
+`test_ca_03_spark_estimates_the_same_intervals_with_the_same_method_and_value` checks that the Spark job gives, for
+every interval of the CA-03 day, the same method and the same value.
+
+| Rule | CA | `pipeline` | Spark job | Status |
+|---|---|---|---|---|
+| RN-03 gaps: interpolation ≤ 2 h, else 4-week profile | CA-03 | `pipeline.estimation.fill_gaps` | `jobs.estimate_gaps.fill_gaps` | Implemented (US-34) |
