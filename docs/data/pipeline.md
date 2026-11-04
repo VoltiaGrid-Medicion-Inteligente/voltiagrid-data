@@ -305,3 +305,12 @@ python -m jobs.fact_consumption --run f3-2026-11-02 --lake ../voltiagrid-api/lak
 ```
 
 Reference run (dev seed, January 2013): 600 rows (200 customers × 3 bands), 32,284.1 kWh, amount 6,481.87.
+
+### 8.3 Tariff change in the middle of the month (T-35.3)
+
+`tests/test_tariff_bands.py` builds a calendar whose prices go up on 2013-03-15. March comes out with two `peak` rows:
+2.0 kWh at 0.30 (until the 14th, 0.60) and 2.0 kWh at 0.35 (from the 15th, 0.70). Other tests check that without a
+change each band is one row per month, and that the job stops when a date has no band.
+`test_rn_05_spark_band_equals_the_calendar_lookup_for_every_half_hour` compares the Spark band with
+`validate_tariffs.band_for` for the 96 half hours around the change of period on 2012-01-01. RN-05 is now
+**Implemented** in the traceability matrix (lookup and Spark assignment).

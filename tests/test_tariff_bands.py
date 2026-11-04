@@ -80,3 +80,69 @@ def test_monthly_consumption_sums_kwh_and_amount_per_customer_and_band(spark, ta
     assert rows[("CU-1", "off-peak")].amount == Decimal("0.06")
     assert rows[("CU-2", "intermediate")].amount == Decimal("0.72")
     assert len(rows) == 3
+
+
+# ---------- T-35.3: a tariff change in the middle of the month ----------
+
+def mid_month_tariffs(spark):
+    """Prices go up on 2013-03-15: two periods inside March."""
+    from datetime import date as d
+
+    from schemas.f7 import F7_SCHEMA
+
+    rows = []
+    for start, end, prices in (("2013-01-01", "2013-03-14", ("0.12", "0.18", "0.30")),
+                               ("2013-03-15", "2099-12-31", ("0.14", "0.20", "0.35"))):
+        off, mid, peak = prices
+        rows += [(start, end, "00:00:00", "07:59:59", "off-peak", off), (start, end, "08:00:00", "17:59:59", "intermediate", mid),
+                 (start, end, "18:00:00", "21:59:59", "peak", peak), (start, end, "22:00:00", "23:59:59", "off-peak", off)]
+    typed = [(d.fromisoformat(a), d.fromisoformat(b), s, e, n, Decimal(p)) for a, b, s, e, n, p in rows]
+    return spark.createDataFrame(typed, F7_SCHEMA)
+
+
+def test_tariff_change_in_the_middle_of_the_month_splits_it(spark):
+    from jobs.fact_consumption import monthly_consumption
+
+    filled = filled_frame(spark, [
+        ("M1", datetime(2013, 3, 14, 19, 0), 1.0, False),   # last day of the old price: peak 0.30
+        ("M1", datetime(2013, 3, 14, 19, 30), 1.0, False),
+        ("M1", datetime(2013, 3, 15, 19, 0), 2.0, False),   # first day of the new price: peak 0.35
+        ("M1", datetime(2013, 3, 20, 10, 0), 1.0, False),   # intermediate, new price only
+    ])
+    rows = monthly_consumption(filled, meters_frame(spark, [("M1", "CU-1")]), mid_month_tariffs(spark)).collect()
+    peak = sorted((r for r in rows if r.band_name == "peak"), key=lambda r: r.tariff_valid_from)
+    assert [(str(r.tariff_valid_from), r.price_per_kwh, r.energy_kwh, r.amount) for r in peak] == [
+        ("2013-01-01", Decimal("0.3000"), 2.0, Decimal("0.60")),
+        ("2013-03-15", Decimal("0.3500"), 2.0, Decimal("0.70")),
+    ]
+    assert {r.month for r in rows} == {"2013-03"}
+    assert sum(r.amount for r in rows) == Decimal("1.50")  # 0.60 + 0.70 + 0.20
+
+
+def test_without_a_change_each_band_is_one_row_per_month(spark, tariffs):
+    from jobs.fact_consumption import monthly_consumption
+
+    filled = filled_frame(spark, [("M1", datetime(2013, 3, d, 19, 0), 1.0, False) for d in range(1, 32)])
+    rows = monthly_consumption(filled, meters_frame(spark, [("M1", "CU-1")]), tariffs).collect()
+    assert len(rows) == 1 and rows[0].energy_kwh == 31.0
+
+
+def test_the_job_stops_when_a_date_has_no_band(spark, tmp_path):
+    from datetime import date
+
+    from pyspark.sql import functions as F
+
+    from jobs.estimate_gaps import filled_path
+    from jobs.fact_consumption import run
+    from jobs.inventory import write_raw
+    from jobs.lake import Lake
+
+    lake = Lake.local(str(tmp_path / "lake"))
+    filled = filled_frame(spark, [("M1", datetime(2010, 6, 1, 12, 0), 1.0, False)]).withColumn(
+        "date", F.to_date("interval_start"))
+    filled.write.partitionBy("date").parquet(filled_path(lake))
+    write_raw(lake, {"meters": (["meter_id", "customer_code", "transformer_code", "transformer_capacity_kva",
+                                 "circuit_code", "circuit_capacity_kva"],
+                                [("M1", "CU-1", "TR-1", Decimal("1"), "CT-1", Decimal("1"))])}, date(2026, 11, 1))
+    with pytest.raises(SystemExit, match="no tariff band"):
+        run(spark, lake, ["2010-06"])
