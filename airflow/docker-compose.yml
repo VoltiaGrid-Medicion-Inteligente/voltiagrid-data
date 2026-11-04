@@ -2,8 +2,10 @@
 #   cd airflow
 #   copy .env.example .env        (then change the change-me values)
 #   docker compose up -d --build
-#   open http://localhost:8080
+#   open http://localhost:8080 (Airflow) and http://localhost:5555 (Flower, the Celery workers)
 # It joins the `voltia` network of voltiagrid-api to reach its RabbitMQ, database and F5 API.
+# CeleryExecutor (ADR-004, T-32.2): the scheduler puts each task in RabbitMQ (the same broker as the readings,
+# ADR-001), two workers take them, and the metadata and Celery results live in airflow-db (Postgres).
 # Ports listen only on 127.0.0.1; secrets use ${VAR:?} so compose stops with a clear message if one is missing.
 
 x-airflow-common: &airflow-common
@@ -13,8 +15,11 @@ x-airflow-common: &airflow-common
     dockerfile: airflow/Dockerfile
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}@airflow-db:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: amqp://${RABBITMQ_USER:?set RABBITMQ_USER in .env}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}@rabbitmq:5672//
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/airflow
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: ${AIRFLOW_WORKER_CONCURRENCY:-2}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
@@ -25,6 +30,7 @@ x-airflow-common: &airflow-common
     VOLTIA_REPO: /opt/voltiagrid
     VOLTIA_LAKE: /lake
     F5_URL: http://api-transformer-metering:8005
+    SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}
     DATABASE_URL: ${F4_DATABASE_URL:?set F4_DATABASE_URL in .env (the voltiagrid-api database, host db)}
   volumes:
     - ../dags:/opt/airflow/dags
@@ -88,6 +94,57 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Two Celery workers with fixed host names, so the task logs and Flower show which one ran each task (T-32.3).
+  airflow-worker-1:
+    <<: *airflow-common
+    command: celery worker
+    hostname: worker-1
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"   # lets the worker finish its tasks on docker compose stop
+    restart: unless-stopped
+    healthcheck: &worker-healthcheck
+      test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || exit 1']
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker-2:
+    <<: *airflow-common
+    command: celery worker
+    hostname: worker-2
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    restart: unless-stopped
+    healthcheck: *worker-healthcheck
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  flower:
+    <<: *airflow-common
+    command: celery flower
+    ports:
+      - "127.0.0.1:5555:5555"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
       interval: 30s
       timeout: 10s
       start_period: 30s
