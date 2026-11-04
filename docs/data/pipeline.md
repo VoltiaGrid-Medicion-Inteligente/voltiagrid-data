@@ -280,3 +280,28 @@ intervals left without a band; the jobs stop if it is not 0 instead of billing w
 | 00:00-07:30, 22:00-23:30 | off-peak 0.10 | off-peak 0.12 |
 | 08:00-17:30 | intermediate 0.15 | intermediate 0.18 |
 | 18:00-21:30 | peak 0.25 | peak 0.30 |
+
+### 8.2 Monthly consumption per customer and band (T-35.2)
+
+`jobs/fact_consumption.py` reads the filled readings of the month (real and estimated, US-34), takes the customer of
+each meter from F4 and the band from F7, and writes `curated/dataset=fact_consumption/month=YYYY-MM/`:
+
+| Column | Meaning |
+|---|---|
+| `customer_code`, `band_name` | |
+| `tariff_valid_from`, `price_per_kwh` | calendar period and price that applied |
+| `energy_kwh` | kWh of the month in that band and period (real + estimated) |
+| `estimated_kwh`, `estimated_intervals` | the estimated part (input of RN-04, US-36) |
+| `intervals` | intervals counted |
+| `amount` | `energy_kwh × price_per_kwh`, 2 decimals |
+
+The group key includes `tariff_valid_from`, so **a tariff change in the middle of the month splits it**: the same band
+appears twice, one row per price. Before writing, the job checks that every interval has a band; if F7 does not cover
+a date it stops instead of billing without a price.
+
+```powershell
+python -m jobs.fact_consumption --month 2013-01 --lake ../voltiagrid-api/lake
+python -m jobs.fact_consumption --run f3-2026-11-02 --lake ../voltiagrid-api/lake   # months touched by that run
+```
+
+Reference run (dev seed, January 2013): 600 rows (200 customers × 3 bands), 32,284.1 kWh, amount 6,481.87.
