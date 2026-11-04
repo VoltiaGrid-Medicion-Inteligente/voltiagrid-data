@@ -16,3 +16,5 @@ derby.log
 
 # Local secrets
 .env
+# Local data lake when jobs run with the default --lake lake
+lake/

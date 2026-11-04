@@ -35,6 +35,22 @@ jobs:
         run: |
           if [ -d tests ]; then python -m pytest tests -v; else echo "No tests yet"; fi
 
+  dags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Airflow (same version as airflow/Dockerfile)
+        run: |
+          pip install "apache-airflow[celery]==2.10.5" pytest \
+            --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+      - name: DAGs load without errors
+        run: python -m pytest tests/test_dags.py -v
+      - name: Airflow compose file is valid
+        run: docker compose -f airflow/docker-compose.yml --env-file airflow/.env.example config -q
+
   secrets:
     runs-on: ubuntu-latest
     steps:
