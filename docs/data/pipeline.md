@@ -259,3 +259,24 @@ every interval of the CA-03 day, the same method and the same value.
 | Rule | CA | `pipeline` | Spark job | Status |
 |---|---|---|---|---|
 | RN-03 gaps: interpolation ≤ 2 h, else 4-week profile | CA-03 | `pipeline.estimation.fill_gaps` | `jobs.estimate_gaps.fill_gaps` | Implemented (US-34) |
+
+## 8. Tariff bands and monthly consumption (US-35, RN-05)
+
+### 8.1 Band by effective date (T-35.1)
+
+`jobs/tariff_bands.py`, `assign_bands`. Each interval takes the F7 row (`data/reference/tariffs.csv`, `schemas/f7.py`)
+valid on its **date** and at its **time**:
+
+```
+valid_from <= date(interval_start) <= valid_to   and   start_time <= time(interval_start) <= end_time
+```
+
+F7 has fewer than 100 rows, so it is broadcast to every Spark task: the range join needs no shuffle. Each row gets
+`band_name`, `price_per_kwh` and `tariff_valid_from` (the calendar period that priced it). `missing_bands` counts
+intervals left without a band; the jobs stop if it is not 0 instead of billing without a price.
+
+| Interval | 2011 | 2012 onwards |
+|---|---|---|
+| 00:00-07:30, 22:00-23:30 | off-peak 0.10 | off-peak 0.12 |
+| 08:00-17:30 | intermediate 0.15 | intermediate 0.18 |
+| 18:00-21:30 | peak 0.25 | peak 0.30 |
