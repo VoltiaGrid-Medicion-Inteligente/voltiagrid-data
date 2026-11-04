@@ -78,3 +78,53 @@ docker compose logs airflow-worker-1 | Select-String "ready"     # celery@worker
 
 In the RabbitMQ console of voltiagrid-api (http://localhost:15672 → **Queues**) a `default` queue appears next to
 `readings.live` and `readings.resend`, with 2 consumers (the workers).
+
+## 3. Evidence: tasks spread over two workers in parallel (T-32.3)
+
+`dags/celery_distribution_check.py`: 8 tasks of 20 seconds that can all start at once, then `report`, which reads from
+the metadata database which worker ran each task and when, prints a table and **fails** if fewer than 2 workers took part
+or no two tasks overlapped. So a green run is the evidence.
+
+### How to get it
+
+1. Stack up (sections 1 and 2) and http://localhost:8080 open.
+2. Turn on `celery_distribution_check` and click **Trigger DAG**. It takes about 45 seconds.
+3. **Grid** view → task `report` → **Logs**: copy the table into the PR.
+4. Flower (http://localhost:5555) → **Tasks**: both `celery@worker-1` and `celery@worker-2` appear with tasks
+   `succeeded`. Screenshot for the PR.
+5. Same data straight from the metadata database:
+
+```powershell
+docker compose exec airflow-db psql -U airflow -d airflow -c "select task_id, hostname, start_date, end_date, state from task_instance where dag_id = 'celery_distribution_check' order by start_date desc limit 9"
+```
+
+### Reference run
+
+Airflow 2.10.5, CeleryExecutor, RabbitMQ as broker and Postgres as metadata and result backend, two workers with
+concurrency 2 (same settings as `airflow/docker-compose.yml`, run outside Docker on a Linux laptop):
+
+| Task | Worker | Start (UTC) | End (UTC) | State |
+|---|---|---|---|---|
+| work_3 | worker-1 | 22:43:53 | 22:44:14 | success |
+| work_1 | worker-1 | 22:43:53 | 22:44:14 | success |
+| work_4 | worker-2 | 22:43:53 | 22:44:14 | success |
+| work_2 | worker-2 | 22:43:53 | 22:44:14 | success |
+| work_5 | worker-2 | 22:44:15 | 22:44:36 | success |
+| work_6 | worker-2 | 22:44:16 | 22:44:36 | success |
+| work_7 | worker-1 | 22:44:16 | 22:44:36 | success |
+| work_8 | worker-1 | 22:44:16 | 22:44:36 | success |
+
+`tasks per worker: {'worker-1': 4, 'worker-2': 4}; at most 4 tasks running at the same time`: 2 workers × concurrency 2
+= 4 tasks at once, in two waves of 21 seconds.
+
+With the Docker stack of the team laptop:
+
+| Evidence | Value |
+|---|---|
+| `report` log: tasks per worker | worker-1: 4, worker-2: 4 |
+| `report` log: tasks at the same time | 4 |
+| Flower screenshot | in the PR |
+| Run date | 2026-11-04 |
+
+Note: a DAG's `start_date` must be in the past. A run whose date is before `start_date` is created with no tasks and is
+marked successful at once, which looks like it worked but ran nothing.
