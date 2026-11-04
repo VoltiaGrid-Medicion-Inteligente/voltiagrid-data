@@ -1,4 +1,4 @@
-"""Gap estimation (US-34): full interval grid (T-34.1), linear interpolation (T-34.2)."""
+"""Gap estimation (US-34): full interval grid (T-34.1), linear interpolation (T-34.2), 4-week profile (T-34.3)."""
 
 from datetime import date, datetime, timedelta
 
@@ -107,5 +107,49 @@ def test_gap_across_midnight_uses_the_reading_of_the_day_before(spark):
 
 
 def test_gap_open_at_the_end_is_not_interpolated(spark):
-    rows = filled_by_time(spark, day_of("M1", DAY, skip={46, 47}))
-    assert rows[at(23, 30)].estimation_method != "interpolation"
+        rows = filled_by_time(spark, day_of("M1", DAY, skip={46, 47}))
+        assert rows[at(23, 30)].estimation_method != "interpolation"
+
+
+# ---------- T-34.3: profile of the same weekday over the last 4 weeks ----------
+
+def four_mondays(kwh_by_week=("0.1", "0.2", "0.3", "0.4")):
+    """The 4 Mondays before DAY, each with its own value."""
+    readings = []
+    for weeks, kwh in zip((4, 3, 2, 1), kwh_by_week):
+        readings += day_of("M1", DAY - timedelta(weeks=weeks), kwh=kwh)
+    return readings
+
+
+def test_5_hour_gap_takes_the_average_of_the_same_time_on_the_last_4_mondays(spark):
+    gap = set(range(30, 40))  # 15:00 to 19:30
+    rows = filled_by_time(spark, four_mondays() + day_of("M1", DAY, kwh="0.9", skip=gap))
+    estimated = [rows[at(15) + i * HALF_HOUR] for i in range(10)]
+    assert {r.estimation_method for r in estimated} == {"profile"}
+    assert {r.energy_kwh for r in estimated} == {0.25}  # (0.1 + 0.2 + 0.3 + 0.4) / 4
+    assert sum(r.is_estimated for r in rows.values()) == 10
+
+
+def test_profile_uses_only_the_weeks_that_have_a_valid_reading(spark):
+    history = four_mondays(("0.1", "Null", "0.3", "-1"))  # two weeks flagged at every interval
+    rows = filled_by_time(spark, history + day_of("M1", DAY, skip=set(range(20, 30))))
+    assert rows[at(10)].estimation_method == "profile" and rows[at(10)].energy_kwh == 0.2
+
+
+def test_other_weekdays_do_not_count(spark):
+    sunday = day_of("M1", DAY - timedelta(days=1), kwh="5.0")
+    rows = filled_by_time(spark, four_mondays() + sunday + day_of("M1", DAY, skip=set(range(20, 30))))
+    assert rows[at(12)].energy_kwh == 0.25
+
+
+def test_gap_without_any_history_is_marked_unavailable(spark):
+    rows = filled_by_time(spark, day_of("M1", DAY, skip=set(range(20, 30))))
+    row = rows[at(12)]
+    assert (row.energy_kwh, row.is_estimated, row.estimation_method) == (None, True, "unavailable")
+
+
+def test_ca_03_counts_on_the_job(spark):
+    gaps = {10, 11, 12} | set(range(30, 40))
+    rows = filled_by_time(spark, four_mondays() + day_of("M1", DAY, kwh="0.3", skip=gaps))
+    methods = [r.estimation_method for r in rows.values() if r.is_estimated]
+    assert methods.count("interpolation") == 3 and methods.count("profile") == 10

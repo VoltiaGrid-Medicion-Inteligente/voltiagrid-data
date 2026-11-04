@@ -19,6 +19,7 @@ from jobs.spark import get_spark
 
 INTERVALS_PER_DAY = 48
 MAX_INTERPOLATED_INTERVALS = 4  # RN-03: gaps up to 2 hours
+PROFILE_WEEKS = 4                # RN-03: same weekday of the last 4 weeks
 FILLED_COLUMNS = ["meter_id", "interval_start", "energy_kwh", "is_estimated", "estimation_method",
                   "quality_flag", "date"]
 
@@ -90,18 +91,43 @@ def interpolate(grid: DataFrame) -> DataFrame:
     ).drop("_pos", "_prev_pos", "_prev_kwh", "_next_pos", "_next_kwh")
 
 
+def weekday_profile(clean_rows: DataFrame) -> DataFrame:
+    """RN-03, second part (T-34.3): for each meter and interval, the average of its valid readings at the same time of
+    the same weekday in the previous 4 weeks (7, 14, 21 and 28 days before). Only real readings count, never estimates.
+
+    Each valid reading is projected 1 to 4 weeks ahead and averaged where it lands, which is the same as looking back
+    from every gap, without a self-join per gap. Columns: meter_id, interval_start, profile_kwh, profile_weeks.
+    """
+    valid = clean_rows.filter(F.col("is_valid") & F.col("interval_start").isNotNull())
+    projected = valid.select(
+        "meter_id", "energy_kwh",
+        F.explode(F.sequence(F.lit(1), F.lit(PROFILE_WEEKS))).alias("_weeks"),
+        "interval_start",
+    ).withColumn("interval_start", F.col("interval_start") + F.make_interval(weeks=F.col("_weeks")))
+    return projected.groupBy("meter_id", "interval_start").agg(
+        F.round(F.avg("energy_kwh"), 4).alias("profile_kwh"),
+        F.count("*").alias("profile_weeks"),
+    )
+
+
 def fill_gaps(clean_rows: DataFrame, days: list) -> DataFrame:
     """Rows for the given days (FILLED_COLUMNS). clean_rows must cover the days and the 28 days before them.
 
     The grid also covers the day before and the day after, so a gap that crosses midnight is measured and
-    interpolated with the readings on both sides.
+    interpolated with the readings on both sides. Order of methods for a gap: interpolation (up to 2 hours, both
+    neighbours known), then the 4-week profile, else 'unavailable' (no history: energy stays null, still estimated).
     """
     days = as_dates(days)
     grid = complete_grid(clean_rows, days[0] - timedelta(days=1), days[-1] + timedelta(days=1))
-    filled = interpolate(grid)
-    method = F.when(F.col("interpolated_kwh").isNotNull(), F.lit("interpolation"))
+    filled = interpolate(grid).join(weekday_profile(clean_rows), ["meter_id", "interval_start"], "left")
+    method = (
+        F.when(F.col("actual_kwh").isNotNull(), F.lit(None))
+        .when(F.col("interpolated_kwh").isNotNull(), F.lit("interpolation"))
+        .when(F.col("profile_kwh").isNotNull(), F.lit("profile"))
+        .otherwise(F.lit("unavailable"))
+    )
     return (
-        filled.withColumn("energy_kwh", F.coalesce("actual_kwh", "interpolated_kwh"))
+        filled.withColumn("energy_kwh", F.coalesce("actual_kwh", "interpolated_kwh", "profile_kwh"))
         .withColumn("estimation_method", method)
         .withColumn("is_estimated", F.col("estimation_method").isNotNull())
         .withColumn("date", F.to_date("interval_start"))
