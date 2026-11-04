@@ -157,6 +157,7 @@ services:
 networks:
   voltia:
     external: true
+    name: voltia
 
 volumes:
   airflow-db:
