@@ -103,3 +103,17 @@ def dates_from_args(spark, args: argparse.Namespace, lake: Lake) -> list[str]:
     if not path_exists(spark, manifest):
         raise SystemExit(f"run manifest not found: {manifest}")
     return sorted(json.loads(read_text(spark, manifest))["dates"])
+
+
+def add_month_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--month", action="append", default=None, metavar="YYYY-MM",
+                       help="month to process (repeat for several)")
+    group.add_argument("--run", default=None, help="process the months touched by this cleaning run")
+
+
+def months_from_args(spark, args: argparse.Namespace, lake: Lake) -> list[str]:
+    if args.month:
+        return sorted(set(args.month))
+    args.date = None
+    return sorted({d[:7] for d in dates_from_args(spark, args, lake)})
