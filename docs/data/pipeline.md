@@ -314,3 +314,17 @@ change each band is one row per month, and that the job stops when a date has no
 `test_rn_05_spark_band_equals_the_calendar_lookup_for_every_half_hour` compares the Spark band with
 `validate_tariffs.band_for` for the 96 half hours around the change of period on 2012-01-01. RN-05 is now
 **Implemented** in the traceability matrix (lookup and Spark assignment).
+
+## 9. Billing check and inspection orders (US-36, RN-04)
+
+### 9.1 Estimated share per customer and month (T-36.1)
+
+`jobs/billing.py`, `estimated_share`: from `fact_consumption`, which already counts `intervals` and
+`estimated_intervals` per band, it adds the bands of each customer and month:
+
+```
+estimated_pct = estimated_intervals / intervals        (4 decimals; 0.12 = 12%)
+```
+
+It counts **intervals, not kWh**, because RN-04 talks about estimated readings. Intervals marked `unavailable` (nothing
+to estimate from) count as estimated. Example: 298 estimated of 2,488 intervals = 0.1198.
