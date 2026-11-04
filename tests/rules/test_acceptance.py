@@ -85,7 +85,6 @@ def test_rn_10_customer_participates_in_at_most_8_events_per_month():
     assert can_participate(events_this_month=7) is True
     assert can_participate(events_this_month=8) is False
 
-@pending("CA-08", "pipeline.control_counts")
 def test_ca_08_24h_resend_of_1000_meters_without_loss_or_duplicates():
     from pipeline.control_counts import reconcile
 

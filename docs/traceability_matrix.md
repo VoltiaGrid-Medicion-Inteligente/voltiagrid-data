@@ -24,7 +24,7 @@ Pending tests are marked `xfail(strict=True)`. When a rule is implemented, its t
 
 | CA    | What it checks                                                                                  | Target                    | Test                                                                         | Status  |
 | ----- | ----------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------- | ------- |
-| CA-08 | A 24 h resend of accumulated readings from 1,000 meters is processed without loss or duplicates | `pipeline.control_counts` | `test_ca_08_24h_resend_of_1000_meters_without_loss_or_duplicates`            | Pending |
+| CA-08 | A 24 h resend of accumulated readings from 1,000 meters is processed without loss or duplicates | `pipeline.control_counts` (Spark: `jobs.control_counts`) | `test_ca_08_24h_resend_of_1000_meters_without_loss_or_duplicates`            | **Implemented** |
 | CA-09 | The full F1 history is processed in the cloud, reporting time, resources and cost               | `docs/data/cloud-run.md`  | `test_ca_09_full_f1_history_processed_in_cloud_with_time_resources_and_cost` | Pending |
 
 ## Coverage check
