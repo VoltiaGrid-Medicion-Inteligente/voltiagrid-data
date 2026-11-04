@@ -226,3 +226,28 @@ estimate   = _prev_kwh + (_next_kwh - _prev_kwh) x (_pos - _prev_pos) / (_next_p
 Example: 0.2 at 4:30, nothing at 5:00, 5:30 and 6:00, 0.6 at 6:30 → 0.3, 0.4, 0.5. The grid includes the day before and
 the day after, so a gap that crosses midnight is measured and interpolated with the readings on both sides. A gap
 longer than 2 hours, or with no valid reading on one side (the end of the data), is left for the profile (T-34.3).
+
+### 7.3 Profile of the same weekday, last 4 weeks (T-34.3)
+
+`weekday_profile`: for each meter and interval, the average of its **valid** readings at the same time on the same
+weekday 1, 2, 3 and 4 weeks before (estimates never feed other estimates). Implemented by projecting every valid
+reading 1 to 4 weeks ahead (`explode(sequence(1, 4))` and `make_interval(weeks=...)`) and averaging where they land,
+which avoids a self-join per gap.
+
+Order of methods for each gap:
+
+| Method | When | `energy_kwh` |
+|---|---|---|
+| `interpolation` | up to 2 hours and a valid reading on both sides | on the line |
+| `profile` | any other gap with at least one of the 4 weeks valid | average of those weeks |
+| `unavailable` | no history (a new meter) | null; still `is_estimated = true` |
+
+Every estimated row has `is_estimated = true`; real readings have `estimation_method = null`. CA-03: a 90-minute gap
+gets 3 interpolated rows and a 5-hour gap 10 profile rows (`test_ca_03_counts_on_the_job`).
+
+```powershell
+python -m jobs.estimate_gaps --run f3-2026-11-02 --lake ../voltiagrid-api/lake
+```
+
+Reference run (dev seed, 2013-02-04, 200 meters): 9,600 rows, 8,846 real, 651 interpolated, 103 by profile (7.9%
+estimated, consistent with `DEFECT_RATE=0.02` for gaps, missing days, nulls, out-of-range values and skewed clocks).
