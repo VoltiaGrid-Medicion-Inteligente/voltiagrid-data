@@ -47,6 +47,22 @@ def lake_from_args(args: argparse.Namespace) -> Lake:
 
 # ---------- small files next to the data (manifests, _SUCCESS), on a local folder or S3 ----------
 
+def put_object(path: str, content: str | bytes) -> None:
+    """Write one raw object without Spark: a local file, or an S3 object when the path is s3a:// or s3://."""
+    body = content.encode("utf-8") if isinstance(content, str) else content
+    if path.startswith(("s3a://", "s3://")):
+        import boto3
+
+        bucket, key = path.split("://", 1)[1].split("/", 1)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=body)
+        return
+    from pathlib import Path
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
+
+
 def _filesystem(spark, path: str):
     jvm = spark.sparkContext._jvm
     hadoop_path = jvm.org.apache.hadoop.fs.Path(path)

@@ -22,7 +22,7 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from jobs.lake import Lake, add_lake_arguments, lake_from_args
+from jobs.lake import Lake, add_lake_arguments, lake_from_args, put_object
 from schemas.f4 import F4_CONTRACTS_SCHEMA, F4_METERS_SCHEMA
 
 METERS_SQL = """
@@ -77,21 +77,9 @@ def write_raw(lake: Lake, tables: dict, ingest_date: date) -> list[str]:
                                "bytes": len(body.encode()), "loaded_by": os.getenv("USERNAME") or os.getenv("USER"),
                                "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}, indent=2)
         for file_name, content in ((f"{name}.csv", body), ("_manifest.json", manifest)):
-            _put(f"{prefix}/{file_name}", content)
+            put_object(f"{prefix}/{file_name}", content)
         written.append(f"{prefix}/{name}.csv ({len(rows)} rows)")
     return written
-
-
-def _put(path: str, content: str) -> None:
-    if path.startswith(("s3a://", "s3://")):
-        import boto3
-
-        bucket, key = path.split("://", 1)[1].split("/", 1)
-        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=content.encode())
-        return
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8", newline="")
 
 
 # ---------- readers ----------
