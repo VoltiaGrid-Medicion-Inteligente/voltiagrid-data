@@ -53,3 +53,19 @@ def test_ca_03_spark_estimates_the_same_intervals_with_the_same_method_and_value
                 for r in fill_gaps(series_with_gaps) if r["ts"].date() == last_day}
     rows = spark_fill_gaps(clean(readings_frame(spark, series_with_gaps)), [last_day]).collect()
     assert {r.interval_start: (r.estimation_method, r.energy_kwh) for r in rows} == expected
+
+
+# ---------- RN-05: jobs.tariff_bands ----------
+
+def test_rn_05_spark_band_equals_the_calendar_lookup_for_every_half_hour(spark):
+    from datetime import timedelta
+
+    from jobs.tariff_bands import assign_bands, read_tariffs
+    from validate_tariffs import band_for, load_tariffs
+
+    times = [datetime(2011, 12, 31) + i * timedelta(minutes=30) for i in range(96)]  # across the change of period
+    readings = spark.createDataFrame([("M1", t) for t in times], "meter_id string, interval_start timestamp_ntz")
+    spark_bands = {r.interval_start: (r.band_name, r.price_per_kwh)
+                   for r in assign_bands(readings, read_tariffs(spark)).collect()}
+    rows = load_tariffs()
+    assert spark_bands == {t: (band_for(rows, t).band_name, band_for(rows, t).price_per_kwh) for t in times}
