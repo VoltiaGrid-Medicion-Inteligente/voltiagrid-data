@@ -1,0 +1,106 @@
+# Airflow for VoltiaGrid (US-32). Run from this folder after the voltiagrid-api stack is up (`make up` there):
+#   cd airflow
+#   copy .env.example .env        (then change the change-me values)
+#   docker compose up -d --build
+#   open http://localhost:8080
+# It joins the `voltia` network of voltiagrid-api to reach its RabbitMQ, database and F5 API.
+# Ports listen only on 127.0.0.1; secrets use ${VAR:?} so compose stops with a clear message if one is missing.
+
+x-airflow-common: &airflow-common
+  image: voltiagrid/airflow:local
+  build:
+    context: ..
+    dockerfile: airflow/Dockerfile
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}@airflow-db:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:?set AIRFLOW_SECRET_KEY in .env}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # What the VoltiaGrid tasks need: the repo (read-only), the lake, F5 and the F4 database of voltiagrid-api
+    PYTHONPATH: /opt/voltiagrid
+    VOLTIA_REPO: /opt/voltiagrid
+    VOLTIA_LAKE: /lake
+    F5_URL: http://api-transformer-metering:8005
+    DATABASE_URL: ${F4_DATABASE_URL:?set F4_DATABASE_URL in .env (the voltiagrid-api database, host db)}
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ..:/opt/voltiagrid:ro
+    - ${LAKE_DIR:-../../voltiagrid-api/lake}:/lake
+    - airflow-logs:/opt/airflow/logs
+  networks: [voltia]
+  depends_on: &airflow-common-depends-on
+    airflow-db:
+      condition: service_healthy
+
+services:
+  airflow-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    networks: [voltia]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: creates or upgrades the metadata tables and the admin user, then exits.
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+networks:
+  voltia:
+    external: true
+
+volumes:
+  airflow-db:
+  airflow-logs:
