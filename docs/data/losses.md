@@ -51,3 +51,37 @@ python -m jobs.transformer_losses --date 2013-01-05 --lake ../voltiagrid-api/lak
 Reference run (dev seed, 2013-01-05, no injected loss): the 4 transformers between -5.0% and 2.4%. Without injected
 losses the difference comes only from the defects of F3 (duplicates with another value, estimates), far below the 12%
 of RN-06.
+
+### 1.3 Three consecutive days above 12% (T-37.3)
+
+`suspicious_transformers`: a transformer is **suspicious on a day** when its `loss_pct` was above 0.12 that day and the
+two days before (exactly 12% does not count; a day without a loss value breaks the streak). Gaps and islands again:
+for the days above the threshold, `date - row_number()` is equal for consecutive days and names each streak;
+`streak_days` and `streak_loss_kwh` accumulate along it. The suspicious transformers of each day are ranked by
+`streak_loss_kwh` (1 = most energy lost).
+
+Output: `curated/dataset=suspicious_transformers/date=YYYY-MM-DD/` with `transformer_code`, `rank`, `streak_days`,
+`streak_start`, `streak_loss_kwh`, `loss_pct`, `loss_kwh`, `delivered_kwh`, `metered_kwh`. The job reads up to 31 days of
+daily losses before the dates it processes, so a streak that started earlier is still counted.
+
+Reference run (dev seed, F5 with a 15% loss injected on `TR-00002` from 2013-01-15 to 2013-01-18):
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8005/losses -ContentType application/json `
+  -Body '{"transformer_code":"TR-00002","start":"2013-01-15T00:00:00Z","end":"2013-01-19T00:00:00Z","loss_pct":0.15}'
+python -m jobs.fetch_f5 --date 2013-01-14 --date 2013-01-15 --date 2013-01-16 --date 2013-01-17 --date 2013-01-18 --date 2013-01-19 --lake ../voltiagrid-api/lake
+python -m jobs.transformer_losses --date 2013-01-14 --date 2013-01-15 --date 2013-01-16 --date 2013-01-17 --date 2013-01-18 --date 2013-01-19 --lake ../voltiagrid-api/lake
+```
+
+| Day | `TR-00002` loss | Result |
+|---|---|---|
+| 01-14 | 0.4% | |
+| 01-15, 01-16 | 13.2%, 13.1% | streak of 1 and 2 days |
+| 01-17 | 13.1% | **suspicious**, #1, 3 days, 119.1 kWh lost |
+| 01-18 | 13.2% | **suspicious**, #1, 4 days, 159.0 kWh lost |
+| 01-19 | -0.5% | streak over |
+
+The same 15% injected in the first week of January (`TR-00001`, 01-06 to 01-09) gave 12.0%, 14.2%, 5.8% and 13.1%, so
+no 3-day streak. Two simulator effects explain it: a duplicate of an out-of-range reading multiplied by 0.5-1.5 can
+land below 25 kWh and pass as valid (one 17.7 kWh reading on 01-06), and in the first week the profile estimates have
+only one previous week (01-01, a holiday) to learn from. Both shrink after a few weeks of history.
