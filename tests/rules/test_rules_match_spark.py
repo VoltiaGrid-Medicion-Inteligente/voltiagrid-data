@@ -39,3 +39,17 @@ def test_ca_02_spark_keeps_the_same_reading_as_the_rule(spark, duplicated_interv
     expected = deduplicate(duplicated_interval)
     rows = clean(readings_frame(spark, duplicated_interval)).collect()
     assert [(r.seq, r.energy_kwh) for r in rows] == [(e["seq"], e["energy_kwh"]) for e in expected]
+
+
+# ---------- CA-03: jobs.estimate_gaps ----------
+
+def test_ca_03_spark_estimates_the_same_intervals_with_the_same_method_and_value(spark, series_with_gaps):
+    from jobs.clean_readings import clean
+    from jobs.estimate_gaps import fill_gaps as spark_fill_gaps
+    from pipeline.estimation import fill_gaps
+
+    last_day = max(r["ts"] for r in series_with_gaps).date()
+    expected = {r["ts"]: (r["estimation_method"], r["energy_kwh"])
+                for r in fill_gaps(series_with_gaps) if r["ts"].date() == last_day}
+    rows = spark_fill_gaps(clean(readings_frame(spark, series_with_gaps)), [last_day]).collect()
+    assert {r.interval_start: (r.estimation_method, r.energy_kwh) for r in rows} == expected

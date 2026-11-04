@@ -24,7 +24,6 @@ def test_ca_02_duplicate_interval_keeps_highest_sequence(duplicated_interval):
     assert len(result) == 1
     assert result[0]["seq"] == 2 and result[0]["energy_kwh"] == 0.30
 
-@pending("RN-03 / CA-03", "pipeline.estimation")
 def test_ca_03_90_min_gap_interpolated_5_hour_gap_by_profile_both_flagged(series_with_gaps):
     from pipeline.estimation import fill_gaps
 
