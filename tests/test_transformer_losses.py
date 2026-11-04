@@ -66,3 +66,53 @@ def test_a_half_hour_with_one_quarter_is_dropped(spark):
                                "transformer_code string, interval_start timestamp_ntz, delivered_kwh double")
     rows = to_half_hour(f5).collect()
     assert [(r.interval_start, r.delivered_kwh) for r in rows] == [(datetime(2013, 1, 5, 0, 0), 2.5)]
+
+
+# ---------- T-37.2: daily loss per transformer ----------
+
+def delivered_frame(spark, rows):
+    return spark.createDataFrame(rows, "transformer_code string, interval_start timestamp_ntz, delivered_kwh double")
+
+
+def metered_frame(spark, rows):
+    return spark.createDataFrame(rows, "transformer_code string, interval_start timestamp_ntz, metered_kwh double, "
+                                       "estimated_kwh double, meters long")
+
+
+def test_loss_is_delivered_minus_meters_over_delivered(spark):
+    from jobs.transformer_losses import daily_losses
+
+    t = datetime(2013, 1, 5, 10, 0)
+    delivered = delivered_frame(spark, [("TR-1", t, 11.5), ("TR-1", t + timedelta(minutes=30), 11.5)])
+    metered = metered_frame(spark, [("TR-1", t, 10.0, 0.0, 50), ("TR-1", t + timedelta(minutes=30), 10.0, 1.0, 50)])
+    row = daily_losses(delivered, metered).first()
+    assert (row.delivered_kwh, row.metered_kwh, row.loss_kwh) == (23.0, 20.0, 3.0)
+    assert row.loss_pct == 0.1304          # a 15% injected loss is 13% of what was delivered
+    assert (row.intervals, row.meters, row.estimated_kwh) == (2, 50, 1.0)
+
+
+def test_only_half_hours_present_on_both_sides_are_compared(spark):
+    from jobs.transformer_losses import daily_losses
+
+    t = datetime(2013, 1, 5, 10, 0)
+    delivered = delivered_frame(spark, [("TR-1", t, 10.0), ("TR-1", t + timedelta(minutes=30), 99.0)])
+    metered = metered_frame(spark, [("TR-1", t, 10.0, 0.0, 1)])
+    row = daily_losses(delivered, metered).first()
+    assert (row.loss_kwh, row.intervals) == (0.0, 1)
+
+
+def test_meters_are_added_per_transformer_with_their_estimates(spark):
+    from decimal import Decimal
+
+    from jobs.transformer_losses import metered_by_transformer
+
+    t = datetime(2013, 1, 5, 10, 0)
+    filled = spark.createDataFrame([("M1", t, 1.0, False), ("M2", t, 0.5, True), ("M3", t, 2.0, False)],
+                                   "meter_id string, interval_start timestamp_ntz, energy_kwh double, is_estimated boolean")
+    meters = spark.createDataFrame(
+        [(m, f"CU-{m}", tx, Decimal("100"), "CT-1", Decimal("1000")) for m, tx in (("M1", "TR-1"), ("M2", "TR-1"), ("M3", "TR-2"))],
+        "meter_id string, customer_code string, transformer_code string, transformer_capacity_kva decimal(8,2), "
+        "circuit_code string, circuit_capacity_kva decimal(8,2)")
+    rows = {r.transformer_code: r for r in metered_by_transformer(filled, meters).collect()}
+    assert (rows["TR-1"].metered_kwh, rows["TR-1"].estimated_kwh, rows["TR-1"].meters) == (1.5, 0.5, 2)
+    assert rows["TR-2"].metered_kwh == 2.0
