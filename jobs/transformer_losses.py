@@ -164,7 +164,10 @@ def main() -> None:
     days = dates_from_args(spark, args, lake)
     suspicious = run(spark, lake, days)
     losses = spark.read.parquet(losses_path(lake)).filter(F.col("date").isin(days))
-    for r in losses.orderBy("date", F.col("loss_pct").desc()).collect():
+    for r in losses.orderBy("date", F.col("loss_pct").desc_nulls_last()).collect():
+        if r.metered_kwh is None or r.loss_pct is None:  # e.g. a day whose meters were all 'unavailable'
+            print(f"{r.date} {r.transformer_code}: delivered {r.delivered_kwh or 0:,.1f} kWh, no meter data to compare")
+            continue
         print(f"{r.date} {r.transformer_code}: delivered {r.delivered_kwh:,.1f} kWh, meters {r.metered_kwh:,.1f}, "
               f"loss {r.loss_pct:.1%} ({r.intervals} half hours)")
     for r in suspicious.orderBy("date", "rank").collect():

@@ -201,3 +201,28 @@ from its inputs; the cleaning job merges with what clean already had (pipeline.m
 
 The DAG reference run of 4.2 is the same check on the dev lake: processing `ingest_date=2026-10-31` again gave the same
 322,308 clean rows and control counts with 0 duplicated.
+
+### 4.4 Every job of the sprint in the DAG (T-39.4)
+
+Each owner added the task of their job, after the jobs that write its inputs:
+
+| Task | Waits for | Story (owner reviews it) |
+|---|---|---|
+| `clean_readings` | — | US-30 |
+| `export_inventory` | — | US-33 (F4 copy, read by load, billing and losses) |
+| `estimate_gaps` | `clean_readings` | US-34 |
+| `control_counts` | `clean_readings` | US-31 (CA-08) |
+| `circuit_load` | `export_inventory`, `estimate_gaps` | US-33 |
+| `fact_consumption` | `export_inventory`, `estimate_gaps` | US-35 |
+| `billing` | `fact_consumption` | US-36 |
+| `fetch_f5` | `clean_readings` (dates of the run) | US-37 |
+| `transformer_losses` | `export_inventory`, `estimate_gaps`, `fetch_f5` | US-37 |
+| `suspicious_meters` | `transformer_losses` | US-38 |
+
+All of them read the dates of the cleaning run (`--run`), so a run processes only the period of its `date`.
+`fetch_f5` reads the run manifest without starting Spark (`jobs.lake.read_run_dates`).
+
+Reference run (`airflow dags test`, dev-seed lake, `date` = 2026-10-31, F5 API and the F4 database of voltiagrid-api
+running): the 10 tasks succeeded in 8 min 32 s. While wiring it, the DAG found one bug that the unit tests did not:
+`transformer_losses` crashed printing a day whose meters were all `unavailable` (no metered value); it now prints
+`no meter data to compare` for that day.
