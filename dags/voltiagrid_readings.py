@@ -9,8 +9,16 @@ Parameters (Trigger DAG w/ config, or `airflow dags trigger voltiagrid_readings 
     source  f3 (concentrators, default) or f1 (Kaggle history loaded to raw in US-23)
     mode    dev (the 4 blocks of the development subset) or full (all 112 blocks); only used with source f1
 
-    clean_readings --> estimate_gaps
-                  \\-> control_counts      (fails if a reading was lost or duplicated between raw and clean)
+    clean_readings   --> estimate_gaps, control_counts, fetch_f5
+    export_inventory --> circuit_load, fact_consumption, transformer_losses
+    estimate_gaps    --> circuit_load, fact_consumption, transformer_losses
+    fact_consumption --> billing
+    fetch_f5         --> transformer_losses --> suspicious_meters
+    control_counts fails if a reading was lost or duplicated between raw and clean (CA-08).
+
+Owners of each task (T-39.4): clean_readings, estimate_gaps, control_counts: data engineering (US-30, US-34, US-31);
+export_inventory, circuit_load: US-33; fact_consumption, billing: US-35, US-36; fetch_f5, transformer_losses,
+suspicious_meters: US-37, US-38.
 """
 
 from datetime import datetime, timedelta
@@ -42,7 +50,7 @@ def job(task_id: str, args: str) -> BashOperator:
 
 with DAG(
     dag_id="voltiagrid_readings",
-    description="Daily: clean the readings of the day before, estimate gaps, check control counts",
+    description="Daily: clean the readings of the day before, estimate gaps, then load, billing and losses",
     start_date=datetime(2026, 10, 1),
     schedule="0 1 * * *",
     catchup=False,
@@ -67,4 +75,16 @@ with DAG(
         ),
     )
 
-    clean >> [estimate, control]
+    inventory = BashOperator(task_id="export_inventory",
+                             bash_command=f"cd $VOLTIA_REPO && python -m jobs.inventory export {LAKE}")
+    circuits = job("circuit_load", f"--run {RUN}")
+    consumption = job("fact_consumption", f"--run {RUN}")
+    bills = job("billing", f"--run {RUN}")
+    f5 = job("fetch_f5", f"--run {RUN}")
+    losses = job("transformer_losses", f"--run {RUN}")
+    meters = job("suspicious_meters", f"--run {RUN}")
+
+    clean >> [estimate, control, f5]
+    [inventory, estimate] >> circuits
+    [inventory, estimate] >> consumption >> bills
+    [inventory, estimate, f5] >> losses >> meters

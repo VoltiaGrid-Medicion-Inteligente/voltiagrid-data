@@ -204,3 +204,16 @@ def test_running_the_job_twice_gives_the_same_rows(spark, tmp_path):
     run(spark, lake, [DAY])
     second = sorted((r.meter_id, r.is_suspicious) for r in spark.read.parquet(lake.curated("suspicious_meters")).collect())
     assert first == second and len(first) == 4
+
+
+def test_a_day_without_suspicious_transformers_evaluates_no_meters(spark, tmp_path):
+    from jobs.suspicious_meters import run
+    from jobs.transformer_losses import _write_by_date, suspicious_path
+
+    import shutil
+
+    lake = build_lake(spark, tmp_path)
+    shutil.rmtree(suspicious_path(lake))
+    empty = spark.createDataFrame([], "transformer_code string, rank int, streak_days int, date date")
+    _write_by_date(spark, empty, suspicious_path(lake), [DAY])      # what transformer_losses writes on a quiet day
+    assert run(spark, lake, [DAY]).count() == 0

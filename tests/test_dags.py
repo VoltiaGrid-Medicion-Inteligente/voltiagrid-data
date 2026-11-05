@@ -103,3 +103,25 @@ def test_f1_history_uses_the_mode_and_the_f1_run_name(dagbag):
 def test_parameters_have_safe_defaults(dagbag):
     params = dagbag.dags["voltiagrid_readings"].params
     assert (params["date"], params["source"], params["mode"]) == (None, "f3", "dev")
+
+
+def test_each_job_waits_for_the_data_it_reads(dagbag):
+    """T-39.4: every job of the sprint is in the DAG, after the jobs that write its inputs."""
+    tasks = dagbag.dags["voltiagrid_readings"].task_dict
+    upstream = {name: task.upstream_task_ids for name, task in tasks.items()}
+    assert upstream["estimate_gaps"] == {"clean_readings"}
+    assert upstream["control_counts"] == {"clean_readings"}
+    assert upstream["fetch_f5"] == {"clean_readings"}
+    assert upstream["circuit_load"] == {"export_inventory", "estimate_gaps"}
+    assert upstream["fact_consumption"] == {"export_inventory", "estimate_gaps"}
+    assert upstream["billing"] == {"fact_consumption"}
+    assert upstream["transformer_losses"] == {"export_inventory", "estimate_gaps", "fetch_f5"}
+    assert upstream["suspicious_meters"] == {"transformer_losses"}
+    assert upstream["export_inventory"] == set() and upstream["clean_readings"] == set()
+
+
+def test_jobs_after_cleaning_read_the_dates_of_the_cleaning_run(dagbag):
+    dag = dagbag.dags["voltiagrid_readings"]
+    for task_id in ("circuit_load", "fact_consumption", "billing", "fetch_f5", "transformer_losses",
+                    "suspicious_meters"):
+        assert "--run f3-2026-11-02 " in render(dag, task_id), task_id

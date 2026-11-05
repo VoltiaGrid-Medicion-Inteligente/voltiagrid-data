@@ -165,3 +165,12 @@ def test_suspicious_transformers_are_ranked_by_energy_lost(spark):
     rows = suspicious_transformers(losses).orderBy("rank").collect()
     assert [(r.rank, r.transformer_code, r.streak_loss_kwh) for r in rows] == [
         (1, "TR-B", 90.0), (2, "TR-C", 60.0), (3, "TR-A", 39.0)]
+
+
+def test_fetch_can_take_the_dates_of_a_cleaning_run_without_spark(tmp_path):
+    from jobs.lake import put_object, read_run_dates
+
+    lake = Lake.local(str(tmp_path / "lake"))
+    put_object(f"{lake.clean('readings', 'interval_30min')}/_runs/f3-2026-11-02.json",
+               json.dumps({"dates": ["2013-01-06", "2013-01-05"]}))
+    assert read_run_dates(lake, "f3-2026-11-02") == ["2013-01-05", "2013-01-06"]

@@ -133,3 +133,22 @@ def months_from_args(spark, args: argparse.Namespace, lake: Lake) -> list[str]:
         return sorted(set(args.month))
     args.date = None
     return sorted({d[:7] for d in dates_from_args(spark, args, lake)})
+
+
+def read_run_dates(lake: Lake, run: str) -> list[str]:
+    """Same as dates_from_args(--run) for jobs that do not start Spark (fetch_f5): reads the manifest directly."""
+    import json
+
+    path = f"{lake.clean('readings', 'interval_30min')}/_runs/{run}.json"
+    if path.startswith(("s3a://", "s3://")):
+        import boto3
+
+        bucket, key = path.split("://", 1)[1].split("/", 1)
+        text = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+    else:
+        from pathlib import Path
+
+        if not Path(path).exists():
+            raise SystemExit(f"run manifest not found: {path}")
+        text = Path(path).read_text(encoding="utf-8")
+    return sorted(json.loads(text)["dates"])
