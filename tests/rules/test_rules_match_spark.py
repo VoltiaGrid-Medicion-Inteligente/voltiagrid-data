@@ -82,3 +82,45 @@ def test_ca_04_spark_close_month_takes_the_same_decision_as_the_rule(spark):
                                   "customer_code string, month string, estimated_pct double")
     rows = {r.estimated_pct: (r.inspection_order, r.is_billable) for r in spark_close_month(share).collect()}
     assert rows == {p: (close_month(p)["inspection_order"], close_month(p)["is_billable"]) for p in pcts}
+
+
+# ---------- CA-05: jobs.transformer_losses and jobs.suspicious_meters ----------
+
+def test_ca_05_spark_flags_the_transformer_on_the_same_day_as_the_rule(spark, transformer_losses):
+    from datetime import date, timedelta
+
+    from jobs.transformer_losses import suspicious_transformers
+    from pipeline.losses import CONSECUTIVE_DAYS, is_suspicious_transformer
+
+    pcts = transformer_losses["daily_loss_pct"]
+    days = [date(2013, 1, 1) + timedelta(days=i) for i in range(len(pcts))]
+    losses = spark.createDataFrame(
+        [(transformer_losses["transformer"], 100.0, 100.0 * (1 - p), 100.0 * p, p, d) for p, d in zip(pcts, days)],
+        "transformer_code string, delivered_kwh double, metered_kwh double, loss_kwh double, loss_pct double, date date")
+    spark_days = {r.date for r in suspicious_transformers(losses).collect()}
+    # the rule on the 3 days that end on each day
+    n = CONSECUTIVE_DAYS
+    rule_days = {days[i] for i in range(n - 1, len(pcts)) if is_suspicious_transformer(pcts[i - n + 1: i + 1])}
+    assert spark_days == rule_days == {days[3]}
+
+
+def test_ca_05_spark_meter_decision_equals_the_rule(spark):
+    from datetime import datetime, timedelta
+
+    from jobs.suspicious_meters import evaluate_meters
+    from pipeline.losses import is_suspicious_meter
+
+    # meter: (zero readings in a row, drop_pct, contract changed)
+    cases = {"zero96": (96, None, False), "zero95": (95, None, False), "drop61": (0, 0.61, False),
+             "drop60": (0, 0.60, False), "drop_contract": (0, 0.9, True), "both": (100, 0.7, False)}
+    candidates = spark.createDataFrame([(m, "TR-1", f"CU-{m}") for m in cases],
+                                       "meter_id string, transformer_code string, customer_code string")
+    start = datetime(2013, 1, 15)
+    zeros = [(m, start + i * timedelta(minutes=30), 0.0, False) for m, (n, _, _) in cases.items() for i in range(n)]
+    zero_window = spark.createDataFrame(zeros, "meter_id string, interval_start timestamp_ntz, energy_kwh double, "
+                                               "is_estimated boolean")
+    drops = spark.createDataFrame([(m, c[1]) for m, c in cases.items()], "meter_id string, drop_pct double")
+    changes = spark.createDataFrame([(f"CU-{m}", True) for m, c in cases.items() if c[2]],
+                                    "customer_code string, contract_changed boolean")
+    decided = {r.meter_id: r.is_suspicious for r in evaluate_meters(candidates, zero_window, drops, changes).collect()}
+    assert decided == {m: is_suspicious_meter(*c) for m, c in cases.items()}

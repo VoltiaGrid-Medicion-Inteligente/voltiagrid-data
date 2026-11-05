@@ -22,12 +22,11 @@ from jobs.inventory import read_meters
 from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
 from jobs.readings import parse_utc
 from jobs.spark import get_spark
+from pipeline.losses import CONSECUTIVE_DAYS, LOSS_THRESHOLD  # RN-06, shared with the rule
 from schemas.f5 import F5_RESPONSE_SCHEMA
 
 HALF_HOUR_SECONDS = 30 * 60
 QUARTERS_PER_HALF_HOUR = 2
-LOSS_THRESHOLD = 0.12    # RN-06
-CONSECUTIVE_DAYS = 3     # RN-06
 STREAK_LOOKBACK_DAYS = 31
 
 

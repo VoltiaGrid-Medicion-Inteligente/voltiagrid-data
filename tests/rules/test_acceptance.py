@@ -52,7 +52,6 @@ def test_rn_05_consumption_gets_the_band_valid_on_the_reading_date():
     assert same_hour_2011.price_per_kwh != same_hour_2013.price_per_kwh
 
 
-@pending("RN-06, RN-07 / CA-05", "pipeline.losses")
 def test_ca_05_transformer_with_15_pct_loss_for_3_days_is_suspicious_and_meters_evaluated(transformer_losses):
     from pipeline.losses import evaluate_transformer
 

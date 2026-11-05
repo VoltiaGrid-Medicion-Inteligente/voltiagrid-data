@@ -20,13 +20,12 @@ from jobs.inventory import read_contracts, read_meters
 from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
 from jobs.spark import get_spark
 from jobs.transformer_losses import suspicious_path
+from pipeline.losses import DROP_THRESHOLD, ZERO_STREAK_INTERVALS  # RN-07, shared with the rule
 
-ZERO_STREAK_INTERVALS = 96     # RN-07: 48 hours of 30-minute readings
 ZERO_LOOKBACK_DAYS = 2         # the day and the two before: room for a 48-hour streak that reaches the day
 RECENT_DAYS = 7                # "current" consumption: the day and the 6 before
 BASELINE_WEEKS = 8             # RN-07: average of the 8 weeks before the recent days
 MIN_BASELINE_DAYS = 28         # with less history there is no fair average to compare with
-DROP_THRESHOLD = 0.60          # RN-07: drop above 60%
 
 
 def zero_streaks(filled: DataFrame) -> DataFrame:
