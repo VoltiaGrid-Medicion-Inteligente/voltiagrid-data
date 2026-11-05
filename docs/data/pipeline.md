@@ -328,3 +328,28 @@ estimated_pct = estimated_intervals / intervals        (4 decimals; 0.12 = 12%)
 
 It counts **intervals, not kWh**, because RN-04 talks about estimated readings. Intervals marked `unavailable` (nothing
 to estimate from) count as estimated. Example: 298 estimated of 2,488 intervals = 0.1198.
+
+### 9.2 Billable or inspection order (T-36.2)
+
+`close_month` applies RN-04 to each customer and month: `estimated_pct > 0.10` → `inspection_order = true`,
+`is_billable = false`. Exactly 10% is still billable. `inspection_orders` creates one order per customer that cannot
+be billed:
+
+| Column | Example |
+|---|---|
+| `order_id` | `IO-2013-01-CU-MAC000002` (stable: closing the month again rewrites the same order, never a second one) |
+| `customer_code`, `month` | |
+| `estimated_pct`, `estimated_intervals`, `intervals` | 0.1203, 179, 1,488 (one meter, 31 days × 48) |
+| `reason` | `estimated readings above 10% of the month (RN-04)` |
+| `created_at` | UTC time the month was closed |
+
+Output: `curated/dataset=billing_status/month=YYYY-MM/` (every customer) and
+`curated/dataset=inspection_orders/month=YYYY-MM/` (only the orders).
+
+```powershell
+python -m jobs.billing --month 2013-01 --lake ../voltiagrid-api/lake
+```
+
+Reference run (dev seed, January 2013): 200 customer-months, 137 billable, 63 inspection orders; estimated share
+between 5.7% and 17.5%, average 9.1%. The simulator injects every defect at `DEFECT_RATE=0.02` and the first day has no
+history to estimate from, so many customers end up just above 10%; with real data the share is much lower.
