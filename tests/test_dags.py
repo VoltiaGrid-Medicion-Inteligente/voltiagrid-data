@@ -71,3 +71,35 @@ def test_tasks_run_the_jobs_of_this_repo_on_the_lake(dagbag):
     command = dag.task_dict["clean_readings"].bash_command
     assert command.startswith("cd $VOLTIA_REPO && python -m jobs.clean_readings")
     assert "--lake $VOLTIA_LAKE" in command
+
+
+def render(dag, task_id, ds="2026-11-02", **params):
+    values = {"date": None, "source": "f3", "mode": "dev"} | params
+    return dag.get_template_env().from_string(dag.task_dict[task_id].bash_command).render(params=values, ds=ds)
+
+
+def test_without_a_date_the_run_processes_its_own_day(dagbag):
+    dag = dagbag.dags["voltiagrid_readings"]
+    assert "--source f3 --ingest-date 2026-11-02 --mode dev" in render(dag, "clean_readings")
+    assert "--run f3-2026-11-02" in render(dag, "estimate_gaps")
+    assert "--ingest-date 2026-11-02" in render(dag, "control_counts")
+
+
+def test_the_date_parameter_processes_only_that_partition(dagbag):
+    dag = dagbag.dags["voltiagrid_readings"]
+    assert "--ingest-date 2026-10-15 " in render(dag, "clean_readings", date="2026-10-15")
+    assert "--run f3-2026-10-15 " in render(dag, "estimate_gaps", date="2026-10-15")
+
+
+def test_f1_history_uses_the_mode_and_the_f1_run_name(dagbag):
+    dag = dagbag.dags["voltiagrid_readings"]
+    assert "--source f1 --ingest-date 2026-10-28 --mode full" in render(dag, "clean_readings", source="f1",
+                                                                      mode="full", date="2026-10-28")
+    # same name as jobs.clean_readings.run_id (this CI job has no PySpark to import it)
+    assert "--run f1-full-2026-10-28 " in render(dag, "estimate_gaps", source="f1", mode="full", date="2026-10-28")
+    assert "nothing to check for F1" in render(dag, "control_counts", source="f1")
+
+
+def test_parameters_have_safe_defaults(dagbag):
+    params = dagbag.dags["voltiagrid_readings"].params
+    assert (params["date"], params["source"], params["mode"]) == (None, "f3", "dev")
