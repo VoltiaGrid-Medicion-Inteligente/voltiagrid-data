@@ -69,3 +69,16 @@ def test_rn_05_spark_band_equals_the_calendar_lookup_for_every_half_hour(spark):
                    for r in assign_bands(readings, read_tariffs(spark)).collect()}
     rows = load_tariffs()
     assert spark_bands == {t: (band_for(rows, t).band_name, band_for(rows, t).price_per_kwh) for t in times}
+
+
+# ---------- CA-04: jobs.billing ----------
+
+def test_ca_04_spark_close_month_takes_the_same_decision_as_the_rule(spark):
+    from jobs.billing import close_month as spark_close_month
+    from pipeline.billing import close_month
+
+    pcts = [0.12, 0.10, 0.1001, 0.0]
+    share = spark.createDataFrame([(f"CU-{i}", "2013-01", p) for i, p in enumerate(pcts)],
+                                  "customer_code string, month string, estimated_pct double")
+    rows = {r.estimated_pct: (r.inspection_order, r.is_billable) for r in spark_close_month(share).collect()}
+    assert rows == {p: (close_month(p)["inspection_order"], close_month(p)["is_billable"]) for p in pcts}

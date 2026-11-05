@@ -353,3 +353,11 @@ python -m jobs.billing --month 2013-01 --lake ../voltiagrid-api/lake
 Reference run (dev seed, January 2013): 200 customer-months, 137 billable, 63 inspection orders; estimated share
 between 5.7% and 17.5%, average 9.1%. The simulator injects every defect at `DEFECT_RATE=0.02` and the first day has no
 history to estimate from, so many customers end up just above 10%; with real data the share is much lower.
+
+CA-04 is enabled (T-36.3): `pipeline.billing.close_month(0.12)` gives `inspection_order = True`, `is_billable = False`.
+The job imports the threshold and the reason text from `pipeline/billing.py`, so they cannot differ, and
+`test_ca_04_spark_close_month_takes_the_same_decision_as_the_rule` checks 12%, 10%, 10.01% and 0% in Spark.
+
+| Rule | CA | `pipeline` | Spark job | Status |
+|---|---|---|---|---|
+| RN-04 > 10% estimated: not billable, inspection order | CA-04 | `pipeline.billing.close_month` | `jobs.billing.close_month` | Implemented (US-36) |

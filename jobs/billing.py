@@ -17,9 +17,7 @@ from pyspark.sql import functions as F
 
 from jobs.lake import Lake, add_lake_arguments, add_month_arguments, lake_from_args, months_from_args, write_text
 from jobs.spark import get_spark
-
-MAX_ESTIMATED_PCT = 0.10  # RN-04: more than 10% estimated -> not billable
-REASON = "estimated readings above 10% of the month (RN-04)"
+from pipeline.billing import MAX_ESTIMATED_PCT, REASON  # the rule and the job share the threshold and the text
 
 
 def estimated_share(fact: DataFrame) -> DataFrame:
