@@ -112,7 +112,8 @@ def evaluate_meters(meters_to_check: DataFrame, zero_window: DataFrame, drops: D
 
 
 def meters_of_suspicious_transformers(spark: SparkSession, lake: Lake, day: date) -> DataFrame:
-    suspicious = spark.read.parquet(suspicious_path(lake)).filter(F.col("date") == F.lit(day)).select("transformer_code")
+    suspicious = (spark.read.schema("transformer_code string, date date").parquet(suspicious_path(lake))
+                  .filter(F.col("date") == F.lit(day)).select("transformer_code"))
     return read_meters(spark, lake).join(suspicious, "transformer_code").select(
         "meter_id", "transformer_code", "customer_code")
 
