@@ -108,3 +108,27 @@ python -m jobs.suspicious_meters --date 2013-01-17 --lake ../voltiagrid-api/lake
 
 Reference run (the two suspicious days of `TR-00002` above): 100 meter-days evaluated (50 meters × 2), none with 48
 hours of zeros. The simulator never sends long runs of zeros; the tests build them.
+
+### 2.2 Drop against the 8-week average (T-38.2)
+
+```
+recent   = the day and the 6 before                 (7 days)
+baseline = the 8 weeks just before the recent days  (56 days)
+drop_pct = 1 - avg daily kWh (recent) / avg daily kWh (baseline)
+drop_60  = drop_pct > 0.60 and no contract change   (exactly 60% is not a drop above 60%)
+```
+
+- Daily kWh uses the filled readings (real and estimated): a meter with gaps is not a meter that dropped.
+- `drop_pct` stays null when the baseline has fewer than **28 days** of data or is 0: there is no fair average to compare
+  with (a meter installed last month).
+- **Contract change** (`contract_changes`): the customer has a contract (F4, `contracts.csv`) that started or ended
+  between the first day of the baseline and the day. A new holder, a new tariff or a move explains a drop, so the meter is
+  not suspicious for it.
+
+A meter is suspicious when `zero_48h` or `drop_60` is true; `reason` lists which (`zero consumption for 48 h or more`,
+`consumption more than 60% below its 8-week average`, or both separated by `;`). Every evaluated meter is written, with
+`zero_streak_intervals`, `avg_daily_kwh_8w`, `baseline_days`, `avg_daily_kwh_last_week`, `drop_pct` and
+`contract_changed`, so the control center can see why a meter was or was not flagged.
+
+Example (day 2013-03-31): baseline 10 kWh/day, last week 3 kWh/day → `drop_pct` 0.70, suspicious; the same drop with a
+contract that started on 2013-03-11 → not suspicious.
