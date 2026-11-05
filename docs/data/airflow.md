@@ -154,3 +154,30 @@ $VOLTIA_LAKE`. The cleaning run writes its manifest `f3-<date>` and the next job
 
 A task runs only when everything upstream succeeded (default `all_success`): if `clean_readings` fails after its
 retries, nothing downstream runs on half-written data.
+
+### 4.2 Date and mode parameters (T-39.2)
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `date` | empty → the run's date (`ds`) | raw partition (`ingest_date`) to process. Only that period is read, and the next jobs process only the reading dates it touched (`--run`) |
+| `source` | `f3` | `f3` = concentrator readings; `f1` = Kaggle history loaded to raw in US-23 |
+| `mode` | `dev` | with `source = f1`: `dev` = the 4 blocks of the development subset, `full` = the 112 blocks (CA-09, in the cloud). Ignored for F3 |
+
+The run manifest name follows: `f3-<date>`, or `f1-<mode>-<date>`, the same name `jobs.clean_readings` writes.
+`control_counts` only applies to F3; with F1 it just logs that there is nothing to compare.
+
+How to run a past day, or the F1 history:
+
+- UI: **Trigger DAG** (play button) → **Trigger DAG w/ config** → change `date`, `source`, `mode` → **Trigger**.
+- CLI (inside the stack):
+
+```powershell
+docker compose exec airflow-scheduler airflow dags trigger voltiagrid_readings -c '{\"date\": \"2026-11-02\"}'
+docker compose exec airflow-scheduler airflow dags trigger voltiagrid_readings -c '{\"date\": \"2026-10-28\", \"source\": \"f1\", \"mode\": \"dev\"}'
+```
+
+Reference run (`airflow dags test voltiagrid_readings 2026-11-01 -c '{"date": "2026-10-31"}'` on the dev-seed lake): the
+three tasks succeeded in 3 min 25 s; `clean_readings` processed only `ingest_date=2026-10-31` (322,308 rows in 36 reading
+dates), `estimate_gaps` the same 36 dates, `control_counts` ended with `OK: nothing lost, nothing duplicated`. An earlier
+attempt with a broken environment showed the retries: `clean_readings` failed, was retried after 2 and 4 minutes, and the
+run failed without starting the next tasks.
