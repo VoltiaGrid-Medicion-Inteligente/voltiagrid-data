@@ -121,10 +121,36 @@ With the Docker stack of the team laptop:
 
 | Evidence | Value |
 |---|---|
-| `report` log: tasks per worker | worker-1: 4, worker-2: 4 |
-| `report` log: tasks at the same time | 4 |
-| Flower screenshot | in the PR |
-| Run date | 2026-11-04 |
+| `report` log: tasks per worker | `<worker-1: n, worker-2: n>` |
+| `report` log: tasks at the same time | `<n>` |
+| Flower screenshot | `<link or image in the PR>` |
+| Run date | `<date>` |
 
 Note: a DAG's `start_date` must be in the past. A run whose date is before `start_date` is created with no tasks and is
 marked successful at once, which looks like it worked but ran nothing.
+
+## 4. Daily readings pipeline (US-39)
+
+### 4.1 DAG with dependencies and retries (T-39.1)
+
+`dags/voltiagrid_readings.py`, every day at 01:00 UTC, for the F3 readings that reached raw the day before
+(`ingest_date` = the run's logical date `ds`):
+
+```
+clean_readings --> estimate_gaps
+              \--> control_counts      fails if a reading was lost or duplicated between raw and clean (CA-08)
+```
+
+Each task is a Spark job of this repo, run in the Celery worker as `cd $VOLTIA_REPO && python -m jobs.<job> ... --lake
+$VOLTIA_LAKE`. The cleaning run writes its manifest `f3-<date>` and the next jobs read the dates from it (`--run`).
+
+| Setting | Value | Why |
+|---|---|---|
+| `retries` | 2 | a failed task is tried twice more before the run fails |
+| `retry_delay`, `retry_exponential_backoff`, `max_retry_delay` | 2 min, then 4, at most 10 | a broker or S3 hiccup has time to pass |
+| `execution_timeout` | 40 min | a stuck job fails inside the 45 minutes of the daily close (US-55) |
+| `max_active_runs` | 1 | two runs at once would overwrite the same partitions |
+| `catchup` | False | turning the DAG on does not launch a run for every day since `start_date` |
+
+A task runs only when everything upstream succeeded (default `all_success`): if `clean_readings` fails after its
+retries, nothing downstream runs on half-written data.
