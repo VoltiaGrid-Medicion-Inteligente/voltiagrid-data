@@ -141,3 +141,17 @@ a suspicious transformer with four meters (48 h of zeros, an 80% drop, the same 
 and a normal transformer whose meter reads zero. Only the four meters of the suspicious transformer are evaluated;
 the first two are flagged with their reason, the third is not because its contract changed, and running the job twice
 gives the same rows.
+
+## CA-05 enabled (US-37, T-37.4)
+
+`pipeline/losses.py` states RN-06 and RN-07 in plain Python: `is_suspicious_transformer`, `is_suspicious_meter` and
+`evaluate_transformer`, which evaluates the meters only when the transformer is suspicious
+(`{"is_suspicious": True, "meters_evaluated": True, ...}` for CA-05: 5%, 15%, 15%, 15%). The Spark jobs import the
+thresholds from it (12%, 3 days, 96 intervals, 60%), and `tests/rules/test_rules_match_spark.py` checks that Spark flags
+the CA-05 transformer on the same day as the rule and takes the same decision for six meters (95 and 96 zeros, 60% and
+61% drop, a drop with a contract change, both conditions).
+
+| Rule | CA | `pipeline` | Spark job | Status |
+|---|---|---|---|---|
+| RN-06 loss > 12% for 3 consecutive days | CA-05 | `pipeline.losses.is_suspicious_transformer` | `jobs.transformer_losses.suspicious_transformers` | Implemented (US-37) |
+| RN-07 zero 48 h or drop > 60% without contract change | CA-05 | `pipeline.losses.is_suspicious_meter` | `jobs.suspicious_meters.evaluate_meters` | Implemented (US-38) |
