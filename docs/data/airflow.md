@@ -181,3 +181,23 @@ three tasks succeeded in 3 min 25 s; `clean_readings` processed only `ingest_dat
 dates), `estimate_gaps` the same 36 dates, `control_counts` ended with `OK: nothing lost, nothing duplicated`. An earlier
 attempt with a broken environment showed the retries: `clean_readings` failed, was retried after 2 and 4 minutes, and the
 run failed without starting the next tasks.
+
+### 4.3 Idempotency: rerunning causes no duplicates (T-39.3, CT-08)
+
+A task retried by Airflow, the same date triggered twice, or a resend landing in a period already processed must not
+duplicate anything. Each job overwrites only its own partitions (`partitionOverwriteMode=dynamic`) and recomputes them
+from its inputs; the cleaning job merges with what clean already had (pipeline.md, section 4).
+
+`tests/test_idempotency.py` builds a small lake (3 meters, 29 days of F3, one message stored twice, a null reading, a
+90-minute gap and 4 missing days), runs the DAG's jobs in order (`clean_readings`, `estimate_gaps`, `circuit_load`,
+`fact_consumption`, `billing`) **twice** for the same ingest date and checks:
+
+| Check | Result |
+|---|---|
+| clean, filled, circuit_load, fact_consumption, billing_status, inspection_orders after the second run | identical row by row to the first (except `created_at` of the order, the time it was written) |
+| one row per meter and interval in clean and filled | yes |
+| the message stored twice | one set of 144 readings for that day |
+| inspection orders | exactly one, `CU-MAC000003` for 2013-03 (13.8% estimated), not two |
+
+The DAG reference run of 4.2 is the same check on the dev lake: processing `ingest_date=2026-10-31` again gave the same
+322,308 clean rows and control counts with 0 duplicated.
