@@ -132,3 +132,12 @@ A meter is suspicious when `zero_48h` or `drop_60` is true; `reason` lists which
 
 Example (day 2013-03-31): baseline 10 kWh/day, last week 3 kWh/day → `drop_pct` 0.70, suspicious; the same drop with a
 contract that started on 2013-03-11 → not suspicious.
+
+### 2.3 Tests (T-38.3)
+
+`tests/test_suspicious_meters.py` covers each piece (zero runs, estimates breaking a run, 95 vs 96 intervals, periods,
+drop, 28-day minimum, 60% vs 61%, contract changes inside and outside the window) and the whole job on a small lake:
+a suspicious transformer with four meters (48 h of zeros, an 80% drop, the same drop with a new contract, a normal meter)
+and a normal transformer whose meter reads zero. Only the four meters of the suspicious transformer are evaluated;
+the first two are flagged with their reason, the third is not because its contract changed, and running the job twice
+gives the same rows.

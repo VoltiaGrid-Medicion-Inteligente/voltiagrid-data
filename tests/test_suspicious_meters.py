@@ -126,3 +126,81 @@ def test_contract_changes_only_count_inside_the_window(spark):
     contracts = contracts_frame(spark, [("CU-OLD", "2012-01-01", None), ("CU-NEW", "2013-02-01", None),
                                         ("CU-END", "2011-01-01", "2013-03-30")])
     assert sorted(r.customer_code for r in contract_changes(contracts, DAY).collect()) == ["CU-END", "CU-NEW"]
+
+
+# ---------- T-38.3: the whole job on a small lake ----------
+
+def build_lake(spark, tmp_path):
+    """TR-S is suspicious on DAY, TR-OK is not. Meters:
+    Z  on TR-S: zero for the last 3 days                 -> suspicious (zero 48 h; its weekly drop is only 43%)
+    D  on TR-S: 10 kWh/day, then 2 kWh/day last week     -> suspicious (drop 80%)
+    C  on TR-S: same drop but a new contract             -> not suspicious
+    N  on TR-S: normal                                   -> evaluated, not suspicious
+    X  on TR-OK: zero for 3 days                         -> not evaluated (its transformer is not suspicious)
+    """
+    from datetime import date
+    from decimal import Decimal
+
+    from jobs.estimate_gaps import filled_path
+    from jobs.inventory import write_raw
+    from jobs.lake import Lake
+    from jobs.suspicious_meters import periods
+    from jobs.transformer_losses import suspicious_path
+
+    lake = Lake.local(str(tmp_path / "lake"))
+    tx = {"Z": "TR-S", "D": "TR-S", "C": "TR-S", "N": "TR-S", "X": "TR-OK"}
+    write_raw(lake, {
+        "meters": (["meter_id", "customer_code", "transformer_code", "transformer_capacity_kva", "circuit_code",
+                    "circuit_capacity_kva"],
+                   [(m, f"CU-{m}", t, Decimal("100"), "CT-1", Decimal("1000")) for m, t in tx.items()]),
+        "contracts": (["customer_code", "contract_code", "tariff_type", "start_date", "end_date"],
+                      [(f"CU-{m}", f"CT-{m}-1", "standard", date(2011, 11, 1), None) for m in tx]
+                      + [("CU-C", "CT-C-2", "dynamic", date(2013, 3, 20), None)]),
+    }, date(2026, 11, 1))
+
+    (r_first, _), (b_first, _) = periods(DAY)
+    zero_from = DAY - timedelta(days=2)
+    rows, d = [], b_first
+    while d <= DAY:
+        for i in range(48):
+            ts = datetime.combine(d, datetime.min.time()) + i * HALF_HOUR
+            for m in tx:
+                if m in ("Z", "X") and d >= zero_from:
+                    kwh = 0.0
+                elif m in ("D", "C") and d >= r_first:
+                    kwh = 2.0 / 48
+                else:
+                    kwh = 10.0 / 48
+                rows.append((m, ts, kwh, False, "ok", d))
+        d += timedelta(days=1)
+    spark.createDataFrame(rows, "meter_id string, interval_start timestamp_ntz, energy_kwh double, is_estimated boolean, "
+                                "quality_flag string, date date") \
+        .write.partitionBy("date").parquet(filled_path(lake))
+    spark.createDataFrame([("TR-S", 1, 3, DAY)], "transformer_code string, rank int, streak_days int, date date") \
+        .write.partitionBy("date").parquet(suspicious_path(lake))
+    return lake
+
+
+def test_job_flags_the_right_meters_with_their_reasons(spark, tmp_path):
+    from jobs.suspicious_meters import run
+
+    lake = build_lake(spark, tmp_path)
+    rows = {r.meter_id: r for r in run(spark, lake, [DAY]).collect()}
+    assert set(rows) == {"Z", "D", "C", "N"}                       # X is on a transformer that is not suspicious
+    assert rows["Z"].is_suspicious and rows["Z"].zero_streak_intervals == 144
+    assert rows["Z"].reason == "zero consumption for 48 h or more"
+    assert rows["Z"].drop_pct == 0.4286                            # (4 x 10 + 3 x 0) / 7 = 5.71 of 10
+    assert rows["D"].is_suspicious and rows["D"].drop_pct == 0.8
+    assert (rows["C"].contract_changed, rows["C"].is_suspicious) == (True, False)
+    assert rows["N"].is_suspicious is False and rows["N"].reason is None
+
+
+def test_running_the_job_twice_gives_the_same_rows(spark, tmp_path):
+    from jobs.suspicious_meters import run
+
+    lake = build_lake(spark, tmp_path)
+    run(spark, lake, [DAY])
+    first = sorted((r.meter_id, r.is_suspicious) for r in spark.read.parquet(lake.curated("suspicious_meters")).collect())
+    run(spark, lake, [DAY])
+    second = sorted((r.meter_id, r.is_suspicious) for r in spark.read.parquet(lake.curated("suspicious_meters")).collect())
+    assert first == second and len(first) == 4
