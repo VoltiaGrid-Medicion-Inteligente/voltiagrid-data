@@ -85,3 +85,26 @@ The same 15% injected in the first week of January (`TR-00001`, 01-06 to 01-09) 
 no 3-day streak. Two simulator effects explain it: a duplicate of an out-of-range reading multiplied by 0.5-1.5 can
 land below 25 kWh and pass as valid (one 17.7 kWh reading on 01-06), and in the first week the profile estimates have
 only one previous week (01-01, a holiday) to learn from. Both shrink after a few weeks of history.
+
+## 2. Suspicious meters (US-38, RN-07)
+
+`jobs/suspicious_meters.py` runs after `jobs.transformer_losses`. For each transformer that is suspicious on the day
+(RN-06), it evaluates the transformer's meters (F4) and writes one row per meter to
+`curated/dataset=suspicious_meters/date=YYYY-MM-DD/` with `is_suspicious` and `reason`.
+
+### 2.1 Zero for 48 hours (T-38.1)
+
+`zero_streaks`: the longest run of consecutive **real** readings of 0 kWh per meter, over the day and the two days
+before (room for a 48-hour run that reaches the day). An estimate or a missing value breaks the run: an estimate is not
+evidence that the meter read zero. Gaps and islands: `row_number()` over all intervals minus `row_number()` over the
+intervals in the same zero / non-zero state is constant inside each run.
+
+`zero_streak_intervals >= 96` (48 hours of 30-minute readings) → `zero_48h = true`, suspicious, reason
+`zero consumption for 48 h or more`. 95 intervals (47.5 hours) is not enough.
+
+```powershell
+python -m jobs.suspicious_meters --date 2013-01-17 --lake ../voltiagrid-api/lake
+```
+
+Reference run (the two suspicious days of `TR-00002` above): 100 meter-days evaluated (50 meters × 2), none with 48
+hours of zeros. The simulator never sends long runs of zeros; the tests build them.
