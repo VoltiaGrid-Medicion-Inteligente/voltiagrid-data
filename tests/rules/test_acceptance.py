@@ -34,7 +34,6 @@ def test_ca_03_90_min_gap_interpolated_5_hour_gap_by_profile_both_flagged(series
     assert methods == {"interpolation", "profile"}
 
 
-@pending("RN-04 / CA-04", "pipeline.billing")
 def test_ca_04_customer_with_12_pct_estimated_gets_inspection_order_and_no_bill():
     from pipeline.billing import close_month
 
