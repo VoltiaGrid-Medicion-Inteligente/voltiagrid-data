@@ -113,6 +113,9 @@ def merge_and_write(spark: SparkSession, new_raw: DataFrame, path: str) -> tuple
     what was cleaned before, so the existing rows are read back (they keep the raw columns) and the rules run again
     on the union. Running the same input twice gives the same result (CT-08).
     """
+    # Parse the raw files once (US-42, T-42.2): the dates and the cleaning both read them; without this, Spark parses
+    # every JSON or CSV file twice.
+    new_raw = new_raw.localCheckpoint(eager=True)
     reading_date = F.to_date(F.coalesce(F.col("interval_start"), F.col("original_ts"))).alias("date")
     dates = sorted({r.date for r in normalize_clock(new_raw).select(reading_date).distinct().collect() if r.date})
     combined = new_raw
