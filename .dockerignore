@@ -1,0 +1,13 @@
+# Only what docker/spark/Dockerfile copies is needed; keep the build context small.
+.git
+.github
+.venv
+venv
+lake
+data/raw
+spark-warehouse
+**/__pycache__
+.pytest_cache
+.ruff_cache
+airflow/.env
+.env

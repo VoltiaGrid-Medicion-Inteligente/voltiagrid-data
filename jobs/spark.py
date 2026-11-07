@@ -18,7 +18,7 @@ def get_spark(app_name: str, master: str = "local[*]", driver_memory: str = "2g"
       whatever `python` is first in PATH, which on Windows often fails with "Python worker failed to connect back".
     """
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-    return (
+    builder = (
         SparkSession.builder.master(master)
         .appName(app_name)
         .config("spark.driver.memory", os.getenv("SPARK_DRIVER_MEMORY", driver_memory))
@@ -27,5 +27,29 @@ def get_spark(app_name: str, master: str = "local[*]", driver_memory: str = "2g"
         .config("spark.sql.shuffle.partitions", str(shuffle_partitions))
         .config("spark.ui.showConsoleProgress", "false")
         .config("spark.ui.enabled", str(ui).lower())
-        .getOrCreate()
     )
+    for key, value in s3a_options().items():
+        builder = builder.config(key, value)
+    return builder.getOrCreate()
+
+
+def s3a_options() -> dict[str, str]:
+    """S3A settings from the environment, for the jobs that read and write s3a:// paths (US-40, T-40.1).
+
+    - Credentials: none here. S3A's default chain finds them: the ECS task role on Fargate, AWS_* variables or an
+      AWS profile on a laptop. Nothing secret goes into the Spark configuration.
+    - AWS_REGION (set in the ECS task definition): the region of the lake buckets.
+    - S3_ENDPOINT: only for an S3-compatible server such as MinIO (the CI image check); path-style URLs and http.
+    The connector classes (hadoop-aws) are in the Spark jobs image (docker/spark/Dockerfile); a laptop running only
+    local paths does not need them.
+    """
+    options = {}
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if region:
+        options["spark.hadoop.fs.s3a.endpoint.region"] = region
+    endpoint = os.getenv("S3_ENDPOINT")
+    if endpoint:
+        options["spark.hadoop.fs.s3a.endpoint"] = endpoint
+        options["spark.hadoop.fs.s3a.path.style.access"] = "true"
+        options["spark.hadoop.fs.s3a.connection.ssl.enabled"] = str(endpoint.startswith("https://")).lower()
+    return options
