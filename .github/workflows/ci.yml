@@ -5,6 +5,7 @@ on:
     branches: [develop, main]
   pull_request:
     branches: [develop, main]
+  workflow_call: # the release workflow runs the same checks first (US-49, T-49.4)
 
 jobs:
   lint:

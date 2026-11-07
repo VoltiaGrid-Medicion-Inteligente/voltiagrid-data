@@ -1,0 +1,107 @@
+name: release
+
+# Versioned artifacts of every merge to main (US-49, T-49.4). After the same checks as a pull request:
+#   bundle  the pipeline code Airflow runs (dags, jobs, rules, schemas, reference data) as
+#           voltiagrid-pipeline-<commit>.tar.gz with a VERSION.json, kept as a GitHub Release pipeline-<commit>
+#   image   the Spark jobs image, voltiagrid/spark-jobs:<commit> in ECR (US-40), with the OIDC role (US-46, T-46.1)
+# The commit is the version: the image tag, the release and the code in Airflow all point to the same one.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub Release
+  id-token: write   # the GitHub OIDC token for AWS
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  bundle:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Bundle the pipeline code with its version
+        env:
+          COMMIT: ${{ steps.v.outputs.commit }}
+        run: |
+          python - <<'PY'
+          import json, os, re, datetime
+          pins = dict(re.findall(r"^([A-Za-z0-9_\-\[\]]+)[=><~]=?([^\s#]+)", open("requirements.txt").read(), re.M))
+          json.dump({"commit": os.environ["COMMIT"], "full_commit": os.environ["GITHUB_SHA"],
+                     "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                     "spark_image": f"voltiagrid/spark-jobs:{os.environ['COMMIT']}", "requirements": pins},
+                    open("VERSION.json", "w"), indent=2)
+          PY
+          tar -czf "voltiagrid-pipeline-$COMMIT.tar.gz" VERSION.json dags jobs pipeline schemas data/reference \
+              dev_subset.py requirements.txt
+          tar -tzf "voltiagrid-pipeline-$COMMIT.tar.gz" | head -20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voltiagrid-pipeline-${{ steps.v.outputs.commit }}
+          path: voltiagrid-pipeline-${{ steps.v.outputs.commit }}.tar.gz
+          retention-days: 90
+      - name: GitHub Release pipeline-<commit> (kept until deleted)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+        run: |
+          if gh release view "pipeline-$COMMIT" > /dev/null 2>&1; then
+            echo "::notice::release pipeline-$COMMIT already exists"
+            exit 0
+          fi
+          gh release create "pipeline-$COMMIT" "voltiagrid-pipeline-$COMMIT.tar.gz" --target "$GITHUB_SHA" \
+            --title "Pipeline $COMMIT" --notes "Code of the data pipeline at $GITHUB_SHA. Spark image: voltiagrid/spark-jobs:$COMMIT"
+
+  image:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: repo
+        name: Is the dev stack up (the ECR repository exists)?
+        run: |
+          # Only "repository not found" means the stack is down; any other error (permissions, network) fails the job.
+          if out=$(aws ecr describe-repositories --repository-names voltiagrid/spark-jobs 2>&1); then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          elif echo "$out" | grep -q RepositoryNotFoundException; then
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::voltiagrid/spark-jobs does not exist: the dev stack is down, the image is not pushed"
+          else
+            echo "$out"
+            exit 1
+          fi
+      - id: ecr
+        if: steps.repo.outputs.up == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: "Build and push (tags are immutable: an existing tag is kept)"
+        if: steps.repo.outputs.up == 'true'
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/voltiagrid/spark-jobs:${{ steps.v.outputs.commit }}
+        run: |
+          if aws ecr describe-images --repository-name voltiagrid/spark-jobs \
+               --image-ids imageTag=${{ steps.v.outputs.commit }} > /dev/null 2>&1; then
+            echo "::notice::$IMAGE is already in ECR"
+            exit 0
+          fi
+          docker build -f docker/spark/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "### Spark image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE\`: use it with \`-var spark_image_tag=${{ steps.v.outputs.commit }}\` in voltiagrid-api" >> "$GITHUB_STEP_SUMMARY"
