@@ -52,3 +52,14 @@ participant was told the window in time.
 Demand-response event on 2013-07-22 from 19:00 to 22:00: please reduce your consumption. Saving 10% or more against
 your usual consumption at those hours earns an incentive.
 ```
+
+### 1.2 CA-06 (T-43.3)
+
+`pipeline.demand_response.declare_event(forecast_temp_c, projected_load_pct, day, overload_from)` is the rule as the
+brief states it: the event (start, end and the two inputs) when both conditions hold, `None` otherwise. Two tests
+check it:
+
+| Test | What it proves |
+|---|---|
+| `tests/rules/test_acceptance.py::test_ca_06_event_only_when_both_conditions_and_max_3_hours` | CA-06: 31 °C and 86% declare; one condition alone does not; the event lasts 3 hours at most |
+| `tests/rules/test_rules_match_spark.py::test_ca_06_spark_declares_the_same_events_as_the_rule` | `jobs.dr_events` declares exactly the same circuits and windows as the rule for 12 combinations |

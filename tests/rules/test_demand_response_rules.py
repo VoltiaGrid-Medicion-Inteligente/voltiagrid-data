@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, time
 
-from pipeline.demand_response import event_window, needs_event
+from pipeline.demand_response import declare_event, event_window, needs_event
 
 DAY = date(2013, 7, 22)
 
@@ -24,3 +24,9 @@ def test_event_starts_at_the_first_overloaded_interval_and_lasts_3_hours_at_most
 def test_event_never_starts_before_the_peak_band():
     start, end = event_window(DAY, time(16, 0))
     assert (start.time(), end.time()) == (time(18, 0), time(21, 0))
+
+
+def test_declared_event_keeps_its_inputs():
+    event = declare_event(31.5, 0.9, DAY, time(18, 30))
+    assert event == {"start": datetime(2013, 7, 22, 18, 30), "end": datetime(2013, 7, 22, 21, 30),
+                     "forecast_temp_c": 31.5, "projected_load_pct": 0.9}
