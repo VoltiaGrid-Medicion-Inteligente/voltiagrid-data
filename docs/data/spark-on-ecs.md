@@ -57,3 +57,28 @@ same as in local mode. The grid, the dependencies and the parameters do not chan
 
 `tests/test_dags.py` checks both runtimes: on ECS every Spark task is a Fargate task of the Spark image with the
 cluster, subnets, Security Group and log group given, and its command reads and writes the S3 lake.
+
+## 3. The F1 history in the cloud (US-41)
+
+### 3.1 DAG `voltiagrid_history` (T-41.1)
+
+Started by hand once F1 is in raw (US-23). Same jobs as the daily DAG, in the order that takes the history to curated:
+
+```
+clean_readings (F1, --mode full) --> estimate_gaps --> fact_consumption (curated, monthly)
+export_inventory ----------------------------------/
+```
+
+| | Daily DAG | History DAG |
+|---|---|---|
+| Capacity | Fargate on-demand (the close must finish in 45 minutes, US-55) | **Fargate Spot** (ADR-014): about 70% cheaper; an interruption is retried from scratch |
+| Task size | 2 vCPU, 8 GB, 21 GiB disk (task definition) | 8 vCPU, 32 GB (Spark gets 24 GB), 100 GiB disk, as overrides of the same task definition |
+| Timeout per task | 40 minutes | 4 hours |
+
+Trigger it with the date of the F1 upload (Airflow UI → **Trigger DAG w/ config**, or):
+
+```powershell
+docker compose exec airflow-scheduler airflow dags trigger voltiagrid_history -c '{\"ingest_date\": \"2026-10-28\", \"mode\": \"full\"}'
+```
+
+Locally (`VOLTIA_RUNTIME=local`) use `mode=dev`: the 4 dev blocks fit a laptop, the full history does not.
