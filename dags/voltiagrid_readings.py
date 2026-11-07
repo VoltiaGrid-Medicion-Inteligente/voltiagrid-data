@@ -2,7 +2,9 @@
 (T-39.2).
 
 Every day at 01:00 UTC it processes the F3 readings that reached raw the day before (ingest_date = the run's date).
-Each task is one Spark job of this repo, run in the Airflow worker with `python -m jobs.<job>`.
+Each task is one job of this repo. With VOLTIA_RUNTIME=ecs the Spark jobs run as ECS Fargate tasks on the S3 lake and
+the pull jobs (F4 export, F5 fetch) in the worker (US-40, T-40.3, voltiagrid_common.py); by default everything runs in
+the worker with `python -m jobs.<job>` on the local lake.
 
 Parameters (Trigger DAG w/ config, or `airflow dags trigger voltiagrid_readings -c '{"date": "2026-11-02"}'`):
     date    raw partition (ingest date) to process; empty = the run's date. Only that period is processed.
@@ -25,12 +27,11 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.models.param import Param
-from airflow.operators.bash import BashOperator
+from voltiagrid_common import spark_job, worker_job
 
 INGEST_DATE = "{{ params.date or ds }}"
 # name of the cleaning run manifest (clean/.../_runs/<run>.json), as jobs.clean_readings.run_id builds it
 RUN = "{{ ('f3-' if params.source == 'f3' else 'f1-' ~ params.mode ~ '-') ~ (params.date or ds) }}"
-LAKE = "--lake $VOLTIA_LAKE"
 
 default_args = {
     "owner": "voltiagrid",
@@ -40,12 +41,6 @@ default_args = {
     "max_retry_delay": timedelta(minutes=10),
     "execution_timeout": timedelta(minutes=40),  # inside the 45 minutes of the daily close (US-55)
 }
-
-
-def job(task_id: str, args: str) -> BashOperator:
-    """One Spark job of this repo. The command runs from the repo folder, so relative paths like
-    data/reference/tariffs.csv work the same as on a laptop."""
-    return BashOperator(task_id=task_id, bash_command=f"cd $VOLTIA_REPO && python -m jobs.{task_id} {args} {LAKE}")
 
 
 with DAG(
@@ -64,25 +59,19 @@ with DAG(
     },
     tags=["voltiagrid", "pipeline"],
 ) as dag:
-    clean = job("clean_readings", f"--source {{{{ params.source }}}} --ingest-date {INGEST_DATE} --mode {{{{ params.mode }}}}")
-    estimate = job("estimate_gaps", f"--run {RUN}")
-    control = BashOperator(
-        task_id="control_counts",
-        bash_command=(
-            "{% if params.source == 'f3' %}"
-            f"cd $VOLTIA_REPO && python -m jobs.control_counts --ingest-date {INGEST_DATE} {LAKE}"
-            "{% else %}echo 'control counts compare F3 raw with clean; nothing to check for F1'{% endif %}"
-        ),
-    )
+    clean = spark_job("clean_readings",
+                      f"--source {{{{ params.source }}}} --ingest-date {INGEST_DATE} --mode {{{{ params.mode }}}}")
+    estimate = spark_job("estimate_gaps", f"--run {RUN}")
+    control = spark_job("control_counts", f"--ingest-date {INGEST_DATE}", condition="params.source == 'f3'",
+                        otherwise="control counts compare F3 raw with clean; nothing to check for F1")
 
-    inventory = BashOperator(task_id="export_inventory",
-                             bash_command=f"cd $VOLTIA_REPO && python -m jobs.inventory export {LAKE}")
-    circuits = job("circuit_load", f"--run {RUN}")
-    consumption = job("fact_consumption", f"--run {RUN}")
-    bills = job("billing", f"--run {RUN}")
-    f5 = job("fetch_f5", f"--run {RUN}")
-    losses = job("transformer_losses", f"--run {RUN}")
-    meters = job("suspicious_meters", f"--run {RUN}")
+    inventory = worker_job("export_inventory", "python -m jobs.inventory export")
+    circuits = spark_job("circuit_load", f"--run {RUN}")
+    consumption = spark_job("fact_consumption", f"--run {RUN}")
+    bills = spark_job("billing", f"--run {RUN}")
+    f5 = worker_job("fetch_f5", f"python -m jobs.fetch_f5 --run {RUN}")
+    losses = spark_job("transformer_losses", f"--run {RUN}")
+    meters = spark_job("suspicious_meters", f"--run {RUN}")
 
     clean >> [estimate, control, f5]
     [inventory, estimate] >> circuits

@@ -125,3 +125,78 @@ def test_jobs_after_cleaning_read_the_dates_of_the_cleaning_run(dagbag):
     for task_id in ("circuit_load", "fact_consumption", "billing", "fetch_f5", "transformer_losses",
                     "suspicious_meters"):
         assert "--run f3-2026-11-02 " in render(dag, task_id), task_id
+
+
+# ---------- runtime on ECS Fargate (US-40, T-40.3) ----------
+
+ECS_ENV = {"VOLTIA_RUNTIME": "ecs", "VOLTIA_ECS_CLUSTER": "voltiagrid-dev", "VOLTIA_SPARK_TASK": "voltiagrid-dev-spark-jobs",
+           "VOLTIA_SUBNETS": "subnet-a,subnet-b", "VOLTIA_SECURITY_GROUP": "sg-app", "AWS_REGION": "us-east-1"}
+
+
+@pytest.fixture(scope="module")
+def ecs_dagbag():
+    import os
+
+    from airflow.models import DagBag
+
+    saved = {k: os.environ.get(k) for k in ECS_ENV}
+    os.environ.update(ECS_ENV)
+    try:
+        yield DagBag(dag_folder=str(DAGS), include_examples=False)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def ecs_command(dag, task_id, ds="2026-11-02", **params):
+    values = {"date": None, "source": "f3", "mode": "dev"} | params
+    command = dag.task_dict[task_id].overrides["containerOverrides"][0]["command"][2]
+    return dag.get_template_env().from_string(command).render(params=values, ds=ds)
+
+
+def test_ecs_runtime_loads_without_errors(ecs_dagbag):
+    assert ecs_dagbag.import_errors == {}
+
+
+def test_on_ecs_spark_jobs_are_fargate_tasks_of_the_spark_image(ecs_dagbag):
+    from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
+
+    dag = ecs_dagbag.dags["voltiagrid_readings"]
+    spark = ["clean_readings", "estimate_gaps", "control_counts", "circuit_load", "fact_consumption", "billing",
+             "transformer_losses", "suspicious_meters"]
+    for task_id in spark:
+        task = dag.task_dict[task_id]
+        assert isinstance(task, EcsRunTaskOperator), task_id
+        assert (task.cluster, task.task_definition) == ("voltiagrid-dev", "voltiagrid-dev-spark-jobs")
+        assert task.capacity_provider_strategy == [{"capacityProvider": "FARGATE", "weight": 1}]   # on-demand
+        net = task.network_configuration["awsvpcConfiguration"]
+        assert (net["subnets"], net["securityGroups"], net["assignPublicIp"]) == (["subnet-a", "subnet-b"], ["sg-app"],
+                                                                                    "ENABLED")
+        assert task.awslogs_group == "/ecs/voltiagrid-dev/spark-jobs"
+        assert task.retries >= 2 and task.execution_timeout is not None   # same retries as local mode
+
+
+def test_on_ecs_the_job_reads_and_writes_the_s3_lake_of_the_task(ecs_dagbag):
+    dag = ecs_dagbag.dags["voltiagrid_readings"]
+    command = ecs_command(dag, "clean_readings", date="2026-11-04")
+    assert command.startswith("python -m jobs.clean_readings --source f3 --ingest-date 2026-11-04 --mode dev")
+    assert command.endswith("--raw $LAKE_RAW --clean $LAKE_CLEAN --curated $LAKE_CURATED")
+    assert "--run f3-2026-11-04 " in ecs_command(dag, "estimate_gaps", date="2026-11-04")
+    assert "nothing to check for F1" in ecs_command(dag, "control_counts", source="f1")
+
+
+def test_on_ecs_pull_jobs_stay_in_the_worker_and_write_raw_in_s3(ecs_dagbag):
+    dag = ecs_dagbag.dags["voltiagrid_readings"]
+    for task_id in ("export_inventory", "fetch_f5"):
+        command = dag.task_dict[task_id].bash_command
+        assert command.startswith("cd $VOLTIA_REPO && python -m jobs."), task_id
+        assert "--raw $VOLTIA_LAKE_RAW --clean $VOLTIA_LAKE_CLEAN --curated $VOLTIA_LAKE_CURATED" in command
+
+
+def test_local_runtime_is_still_the_default(dagbag):
+    from airflow.operators.bash import BashOperator
+
+    assert all(isinstance(t, BashOperator) for t in dagbag.dags["voltiagrid_readings"].tasks)
