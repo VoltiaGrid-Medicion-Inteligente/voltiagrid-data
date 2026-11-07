@@ -107,3 +107,48 @@ much. If the client sets another rate, only `peak_price` in `jobs/dr_settlement.
 notification. The count reads every participation of the month in the lake and also the days processed earlier in the
 same run, in date order, so running a whole month at once gives the same result as running it day by day. Events of
 the previous month do not count.
+
+### 2.4 CA-07 and RN-10 (T-44.5)
+
+`incentive_applies(savings_pct)` and `can_participate(events_this_month)` in `pipeline/demand_response.py` are the two
+rules as the brief states them. Four tests check them:
+
+| Test | What it proves |
+|---|---|
+| `test_acceptance.py::test_ca_07_no_incentive_with_8_pct_saving_incentive_with_11_pct` | CA-07: 8% earns nothing, 11% earns the incentive |
+| `test_acceptance.py::test_rn_10_customer_participates_in_at_most_8_events_per_month` | RN-10: the 8th event is allowed, the 9th is not |
+| `test_rules_match_spark.py::test_ca_07_spark_pays_the_incentive_to_the_same_savings_as_the_rule` | `jobs.dr_settlement` pays exactly the customers the rule pays (8%, 10%, 11% and a negative saving) |
+| `test_rules_match_spark.py::test_rn_10_spark_lets_in_the_same_customers_as_the_rule` | `jobs.dr_events` lets in exactly the customers the rule allows, for 0 to 9 earlier events |
+
+### 2.5 Publishing to the API (T-44.4)
+
+The customer sees their events in the customer consumption API (`GET /me/events`, voltiagrid-api), which reads the
+table `dr_participation` of the operational database. `jobs/publish_dr.py` copies there the settlement of the days
+given, with the event window, replacing those days in one transaction:
+
+```powershell
+python -m jobs.publish_dr --date 2013-07-22 --lake ../voltiagrid-api/lake    # DATABASE_URL as for jobs.inventory
+```
+
+Order for one day: `circuit_load` (of D − 7) → `dr_events` → `estimate_gaps` → `dr_settlement` → `publish_dr`.
+
+## 3. Fact table (US-45)
+
+`jobs/fact_dr_participation.py` turns the settlement into the fact of the dimensional model, with the keys of
+*Analytics layer* (`docs/data/analytics.md`):
+
+```powershell
+python -m jobs.fact_dr_participation --date 2013-07-22 --lake ../voltiagrid-api/lake
+```
+
+| Column | Meaning |
+|---|---|
+| `date_key`, `event_id`, `customer_code`, `circuit_code` | Keys: event day, event, customer (F4), circuit of the event |
+| `baseline_kwh`, `actual_kwh`, `savings_kwh`, `savings_pct` | RN-09 (null without a fair baseline) |
+| `incentive_paid` | 0 or 1 |
+| `incentive_amount` | Money paid, 0 without incentive |
+
+Grain: **one customer in one event**. A customer without a fair baseline keeps its row (it took part) with null
+measures and incentive 0. The job stops with `orphan keys` if an event is not in `dr_events` or a customer is not in F4.
+
+Output: `curated/dataset=fact_dr_participation/date=YYYY-MM-DD/`
