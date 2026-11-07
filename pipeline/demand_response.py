@@ -77,3 +77,13 @@ def incentive_amount(savings_kwh: float | None, savings_pct: float | None, price
     if savings_pct is None or savings_pct < INCENTIVE_MIN_SAVING:
         return 0.0
     return round(savings_kwh * price_per_kwh, 2)
+
+
+def incentive_applies(savings_pct: float | None) -> bool:
+    """RN-09 / CA-07: the customer earns the incentive with a saving of 10% or more."""
+    return savings_pct is not None and savings_pct >= INCENTIVE_MIN_SAVING
+
+
+def can_participate(events_this_month: int) -> bool:
+    """RN-10: a customer can take part in one more event while they have had fewer than 8 this month."""
+    return events_this_month < MAX_EVENTS_PER_MONTH

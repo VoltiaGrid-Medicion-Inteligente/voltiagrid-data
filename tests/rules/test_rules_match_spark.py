@@ -148,3 +148,51 @@ def test_ca_06_spark_declares_the_same_events_as_the_rule(spark):
             if event:
                 expected[c] = (event["start"], event["end"])
         assert spark_events == expected
+
+
+# ---------- CA-07: jobs.dr_settlement ----------
+
+def test_ca_07_spark_pays_the_incentive_to_the_same_savings_as_the_rule(spark):
+    from datetime import date
+
+    from jobs.dr_settlement import settle
+    from jobs.tariff_bands import read_tariffs
+    from pipeline.demand_response import incentive_applies
+
+    day = date(2013, 7, 22)
+    actual = {"CU-A": 9.2, "CU-B": 9.0, "CU-C": 8.9, "CU-D": 10.5}        # baseline 10 -> 8%, 10%, 11%, -5%
+    events = spark.createDataFrame([("DR-1", "CT-1", datetime(2013, 7, 22, 19), datetime(2013, 7, 22, 20), 1.0, 31.0,
+                                     0.9, day)], "event_id string, circuit_code string, start_ts timestamp_ntz, "
+                                    "end_ts timestamp_ntz, duration_h double, forecast_temp_c double, "
+                                    "projected_load_pct double, date date")
+    parts = spark.createDataFrame([("DR-1", c, f"M-{c}", "CT-1", day) for c in actual],
+                                  "event_id string, customer_code string, meter_id string, circuit_code string, date date")
+    rows = []
+    for c, kwh in actual.items():
+        for d in (15, 16, 17, 18, 19):           # baseline days: 2 intervals of 5 kWh in the window
+            rows += [(f"M-{c}", datetime(2013, 7, d, 19, m), 5.0, date(2013, 7, d)) for m in (0, 30)]
+        rows += [(f"M-{c}", datetime(2013, 7, 22, 19, m), kwh / 2, day) for m in (0, 30)]
+    filled = spark.createDataFrame(rows, "meter_id string, interval_start timestamp_ntz, energy_kwh double, date date")
+    result = {r.customer_code: r for r in settle(spark, filled, events, parts, parts, read_tariffs(spark)).collect()}
+    for c in actual:
+        assert result[c].incentive_paid is incentive_applies(result[c].savings_pct), c
+    assert [result[c].incentive_paid for c in actual] == [False, True, True, False]
+
+
+# ---------- RN-10: jobs.dr_events ----------
+
+def test_rn_10_spark_lets_in_the_same_customers_as_the_rule(spark):
+    from datetime import date, timedelta
+
+    from jobs.dr_events import within_monthly_limit
+    from pipeline.demand_response import can_participate
+
+    day = date(2013, 7, 22)
+    schema = "event_id string, customer_code string, meter_id string, circuit_code string, date date"
+    counts = {f"CU-{n}": n for n in range(10)}                    # CU-n took part n times this month
+    earlier = spark.createDataFrame([(f"E-{c}-{i}", c, "M", "CT-1", day.replace(day=1) + timedelta(days=i))
+                                     for c, n in counts.items() for i in range(n)], schema)
+    candidates = spark.createDataFrame([("E-NEW", c, "M", "CT-1", day) for c in counts], schema)
+    allowed = {r.customer_code for r in within_monthly_limit(candidates, earlier, day).collect()}
+    assert allowed == {c for c, n in counts.items() if can_participate(n)}
+    assert "CU-7" in allowed and "CU-8" not in allowed
