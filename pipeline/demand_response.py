@@ -1,5 +1,5 @@
 """RN-08 (declaring a demand-response event) and RN-09 (settling it) as plain Python, the rules the Spark jobs use.
-Spark: jobs/dr_events.py (needs_event, event_window) and jobs/dr_settlement.py (baseline_days).
+Spark: jobs/dr_events.py (needs_event, event_window) and jobs/dr_settlement.py (baseline_days, savings).
 """
 
 from datetime import date, datetime, time, timedelta
@@ -11,6 +11,7 @@ PEAK_START = time(18, 0)            # ... and only inside the peak band (F7: 18:
 PEAK_END = time(22, 0)
 BASELINE_DAYS = 5                   # RN-09: the same intervals of the previous 5 working days without an event
 BASELINE_LOOKBACK_DAYS = 28         # how far back to look for them (4 weeks of working days is plenty)
+INCENTIVE_MIN_SAVING = 0.10         # RN-09: incentive only with a saving of 10% or more
 
 
 def needs_event(forecast_temp_c: float | None, projected_load_pct: float | None) -> bool:
@@ -59,3 +60,18 @@ def baseline_kwh(kwh_by_day: dict[date, float]) -> float | None:
     if len(kwh_by_day) < BASELINE_DAYS:
         return None
     return sum(kwh_by_day.values()) / len(kwh_by_day)
+
+
+def savings(baseline: float | None, actual: float) -> tuple[float | None, float | None]:
+    """RN-09: saving = baseline - actual, in kWh and as a share of the baseline (rounded to 4 decimals)."""
+    if not baseline:
+        return None, None
+    saved = baseline - actual
+    return round(saved, 4), round(saved / baseline, 4)
+
+
+def incentive_amount(savings_kwh: float | None, savings_pct: float | None, price_per_kwh: float) -> float:
+    """Incentive paid: each kWh saved at the peak price of the day (F7), only from a 10% saving on."""
+    if savings_pct is None or savings_pct < INCENTIVE_MIN_SAVING:
+        return 0.0
+    return round(savings_kwh * price_per_kwh, 2)

@@ -1,4 +1,4 @@
-"""Settlement of the demand-response events of some days (US-44): the baseline of each participant (T-44.1).
+"""Settlement of the demand-response events of some days (US-44): baseline (T-44.1), saving and incentive (T-44.2).
 
     python -m jobs.dr_settlement --date 2013-07-22 --lake ../voltiagrid-api/lake
     python -m jobs.dr_settlement --run f3-2026-11-02 --lake ../voltiagrid-api/lake
@@ -8,6 +8,9 @@ participating customer: the baseline days are the last 5 working days before the
 event (pipeline.demand_response.baseline_days, RN-09), and the baseline is the average energy of the customer's meters
 in the event window (same clock times) over those days. Real and estimated readings both count (filled, US-34): a gap
 must not look like a saving. Without 5 baseline days there is no fair baseline (baseline_kwh null).
+
+Saving (T-44.2): actual = the same window on the event day; saving = baseline - actual, in kWh and in % of the
+baseline. From 10% on the customer gets the incentive: each kWh saved at the F7 peak price of the day (RN-09).
 
 Output: curated/dataset=dr_settlement/date=YYYY-MM-DD/, one row per event and customer.
 """
@@ -22,7 +25,8 @@ from jobs.dr_events import read_events, read_participants
 from jobs.estimate_gaps import as_dates, filled_path
 from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
 from jobs.spark import get_spark
-from pipeline.demand_response import BASELINE_DAYS, baseline_days
+from jobs.tariff_bands import DEFAULT_TARIFFS, read_tariffs
+from pipeline.demand_response import BASELINE_DAYS, INCENTIVE_MIN_SAVING, baseline_days
 
 PLAN_SCHEMA = "event_id string, customer_code string, baseline_date date"
 
@@ -80,10 +84,32 @@ def baselines(spark: SparkSession, filled: DataFrame, events: DataFrame, partici
     )
 
 
+def peak_price(tariffs: DataFrame) -> DataFrame:
+    """(date range, price): the F7 peak price, to value the kWh saved inside the event window (always peak band)."""
+    return tariffs.filter(F.col("band_name") == "peak").select("valid_from", "valid_to", "price_per_kwh")
+
+
 def settle(spark: SparkSession, filled: DataFrame, events: DataFrame, participants: DataFrame,
-           all_participants: DataFrame) -> DataFrame:
+           all_participants: DataFrame, tariffs: DataFrame) -> DataFrame:
     """participants: the ones of these events; all_participants: every participation (to skip earlier event days)."""
-    return baselines(spark, filled, events, participants, all_participants)
+    base = baselines(spark, filled, events, participants, all_participants)
+    event_day = participants.select("event_id", "customer_code", F.col("date").alias("day")).distinct()
+    actual = window_energy(filled, event_day, participants, events).select(
+        "event_id", "customer_code", F.round("kwh", 4).alias("actual_kwh"))
+    saved = F.col("baseline_kwh") - F.col("actual_kwh")
+    pct = F.round(saved / F.col("baseline_kwh"), 4)
+    paid = F.coalesce(pct >= F.lit(INCENTIVE_MIN_SAVING), F.lit(False))
+    price = F.col("price_per_kwh").cast("double")
+    return (
+        base.join(actual, ["event_id", "customer_code"], "left")
+        .join(F.broadcast(peak_price(tariffs)), F.col("date").between(F.col("valid_from"), F.col("valid_to")), "left")
+        .withColumn("savings_kwh", F.round(saved, 4))
+        .withColumn("savings_pct", pct)
+        .withColumn("incentive_paid", paid)
+        .withColumn("incentive_amount", F.when(paid, F.round(F.col("savings_kwh") * price, 2)).otherwise(F.lit(0.0)))
+        .select("event_id", "customer_code", "baseline_days", "baseline_kwh", "actual_kwh", "savings_kwh",
+                "savings_pct", "incentive_paid", price.alias("price_per_kwh"), "incentive_amount", "date")
+    )
 
 
 def run(spark: SparkSession, lake: Lake, days: list) -> DataFrame:
@@ -92,7 +118,8 @@ def run(spark: SparkSession, lake: Lake, days: list) -> DataFrame:
     all_participants = read_participants(spark, lake)
     participants = all_participants.join(events.select("event_id"), "event_id").localCheckpoint(eager=True)
     filled = spark.read.parquet(filled_path(lake))
-    result = settle(spark, filled, events, participants, all_participants).localCheckpoint(eager=True)
+    tariffs = read_tariffs(spark, DEFAULT_TARIFFS)
+    result = settle(spark, filled, events, participants, all_participants, tariffs).localCheckpoint(eager=True)
     _write(spark, result, settlement_path(lake), days)
     return result
 
@@ -114,8 +141,11 @@ def main() -> None:
     rows = run(spark, lake, days).orderBy("event_id", "customer_code").collect()
     print(f"dr_settlement: {len(rows)} customer-events in {len(days)} dates")
     for r in rows:
-        base = f"{r.baseline_kwh:.3f} kWh" if r.baseline_kwh is not None else f"no baseline ({r.baseline_days} days)"
-        print(f"  {r.event_id} {r.customer_code}: baseline {base}")
+        if r.baseline_kwh is None:
+            print(f"  {r.event_id} {r.customer_code}: no baseline ({r.baseline_days} days)")
+            continue
+        print(f"  {r.event_id} {r.customer_code}: baseline {r.baseline_kwh:.3f} kWh, actual {r.actual_kwh:.3f}, "
+              f"saving {r.savings_pct:.1%}, incentive {r.incentive_amount:.2f}")
     spark.stop()
 
 
