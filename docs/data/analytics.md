@@ -14,8 +14,13 @@ Power BI reads them in sprint 6, together with the dimensions of US-52.
 | `meter_id`, `customer_code`, `transformer_code`, `circuit_code` | F4 codes | `MAC000002`, `CU-MAC000002` |
 | `band_name` | F7 band | `peak` |
 
-`check_no_orphans` runs before writing: if a key of the fact has no row on its side (a meter that F4 does not have, an
-interval without an F7 band), the job stops with `orphan keys` and writes nothing.
+`check_no_orphans` runs before writing: if a key of the fact has no row on its side (a customer or transformer that F4
+does not have, an interval without an F7 band), the job stops with `orphan keys` and writes nothing.
+
+Meters with readings that F4 does not have are **left out and counted** (`N meters without F4 left out`), as in the
+monthly `fact_consumption` (US-35) and the control counts (US-41): without a customer and a transformer they cannot be
+attributed. A local lake with the dev seed of F4 (200 households) and F1 readings of other households has many; the
+full seed has every F1 household.
 
 ## 1. fact_consumption_interval (US-48)
 

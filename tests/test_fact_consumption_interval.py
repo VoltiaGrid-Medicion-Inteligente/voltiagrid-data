@@ -63,9 +63,20 @@ def test_kwh_of_the_fact_equals_the_filled_readings(spark, tmp_path):
     assert total == 2 * 48 * 0.5
 
 
-def test_a_meter_missing_from_f4_stops_the_job(spark, tmp_path):
+def test_a_meter_missing_from_f4_is_left_out_and_counted(spark, tmp_path, capsys):
     from jobs.fact_consumption_interval import run
 
     lake = build_lake(spark, tmp_path, meters=("M1", "M2"), f4_meters=("M1",))
-    with pytest.raises(SystemExit, match="orphan keys.*M2"):
-        run(spark, lake, [str(DAY)])
+    rows = run(spark, lake, [str(DAY)]).collect()
+    assert {r.meter_id for r in rows} == {"M1"} and len(rows) == 48
+    assert "1 meters without F4 left out (first 10: ['M2'])" in capsys.readouterr().out
+
+
+def test_an_interval_without_an_f7_band_stops_the_job(spark, tmp_path):
+    from jobs.fact_consumption_interval import run
+
+    lake = build_lake(spark, tmp_path)
+    no_tariffs = tmp_path / "tariffs.csv"
+    no_tariffs.write_text("valid_from,valid_to,start_time,end_time,band_name,price_per_kwh\n")
+    with pytest.raises(SystemExit, match="orphan keys"):
+        run(spark, lake, [str(DAY)], str(no_tariffs))

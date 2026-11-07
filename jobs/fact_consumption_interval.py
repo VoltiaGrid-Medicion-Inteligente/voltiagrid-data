@@ -35,7 +35,7 @@ def consumption_interval(filled: DataFrame, meters: DataFrame, tariffs: DataFram
     banded = assign_bands(filled.select("meter_id", "interval_start", "energy_kwh", "is_estimated",
                                         "estimation_method", "date"), tariffs)
     return (
-        banded.join(meters.select("meter_id", "customer_code", "transformer_code"), "meter_id", "left")
+        banded.join(F.broadcast(meters.select("meter_id", "customer_code", "transformer_code")), "meter_id")
         .withColumn("date_key", date_key("date"))
         .withColumn("time_key", time_key("interval_start"))
         .withColumn("energy_cost", F.round(F.col("energy_kwh") * F.col("price_per_kwh"), 4).cast("decimal(12,4)"))
@@ -45,8 +45,14 @@ def consumption_interval(filled: DataFrame, meters: DataFrame, tariffs: DataFram
     )
 
 
+def meters_without_f4(filled: DataFrame, meters: DataFrame) -> list[str]:
+    """Meters with readings on these dates that F4 does not have (left out of the fact)."""
+    return sorted(r.meter_id for r in filled.select("meter_id").distinct()
+                  .join(meters.select("meter_id"), "meter_id", "left_anti").collect())
+
+
 def check(fact: DataFrame, meters: DataFrame, tariffs: DataFrame) -> None:
-    """Every meter is in F4 (so are its customer and transformer) and every interval got a band of F7."""
+    """Every customer and transformer of the fact is in F4 and every interval got a band of F7."""
     check_no_orphans(fact, {"meter_id": meters, "customer_code": meters, "transformer_code": meters,
                             "band_name": tariffs}, "fact_consumption_interval")
 
@@ -54,6 +60,9 @@ def check(fact: DataFrame, meters: DataFrame, tariffs: DataFrame) -> None:
 def run(spark: SparkSession, lake: Lake, dates: list[str], tariffs_path: str = DEFAULT_TARIFFS) -> DataFrame:
     filled = spark.read.parquet(filled_path(lake)).filter(F.col("date").isin(dates))
     meters, tariffs = read_meters(spark, lake), read_tariffs(spark, tariffs_path)
+    missing = meters_without_f4(filled, meters)
+    if missing:
+        print(f"fact_consumption_interval: {len(missing)} meters without F4 left out (first 10: {missing[:10]})")
     fact = consumption_interval(filled, meters, tariffs).localCheckpoint(eager=True)
     check(fact, meters, tariffs)
     path = lake.curated("fact_consumption_interval")
