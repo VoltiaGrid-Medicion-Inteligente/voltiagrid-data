@@ -84,3 +84,18 @@ python -m jobs.dr_settlement --date 2013-07-22 --lake ../voltiagrid-api/lake
 
 Output: `curated/dataset=dr_settlement/date=YYYY-MM-DD/`, one row per event and customer:
 `event_id`, `customer_code`, `baseline_days`, `baseline_kwh`, `date`.
+
+### 2.2 Saving and incentive (T-44.2)
+
+| Column | How |
+|---|---|
+| `actual_kwh` | The customer's meters in the event window on the event day (filled readings) |
+| `savings_kwh` | `baseline_kwh − actual_kwh` (negative when the customer consumed more than usual) |
+| `savings_pct` | `savings_kwh / baseline_kwh`, rounded to 4 decimals |
+| `incentive_paid` | `savings_pct >= 0.10` (RN-09: 8% gets nothing, 10% and 11% do) |
+| `price_per_kwh` | F7 **peak** price valid on the event day (the window is always inside the peak band) |
+| `incentive_amount` | `savings_kwh × price_per_kwh`, rounded to 2 decimals; 0 without incentive |
+
+The rate (one peak price per kWh saved) is the pilot's assumption: the brief fixes when an incentive is paid, not how
+much. If the client sets another rate, only `peak_price` in `jobs/dr_settlement.py` and `incentive_amount` in
+`pipeline/demand_response.py` change.

@@ -51,3 +51,21 @@ def test_baseline_needs_the_5_days():
     assert baseline_kwh(days) is None
     days[date(2013, 7, 19)] = 12.0
     assert baseline_kwh(days) == 7.2
+
+
+# ---------- RN-09: saving and incentive (T-44.2) ----------
+
+def test_saving_in_kwh_and_share_of_the_baseline():
+    from pipeline.demand_response import savings
+
+    assert savings(12.0, 10.8) == (1.2, 0.1)
+    assert savings(7.2, 8.0) == (-0.8, -0.1111)    # consumed more than usual: a negative saving
+    assert savings(None, 5.0) == (None, None)
+
+
+def test_incentive_is_each_kwh_saved_at_the_peak_price_from_10_percent():
+    from pipeline.demand_response import incentive_amount
+
+    assert incentive_amount(1.2, 0.1, 0.30) == 0.36
+    assert incentive_amount(0.96, 0.08, 0.30) == 0.0
+    assert incentive_amount(None, None, 0.30) == 0.0
