@@ -68,14 +68,12 @@ def test_ca_06_event_only_when_both_conditions_and_max_3_hours():
     event = declare_event(forecast_temp_c=33, projected_load_pct=0.95)
     assert event["end"] - event["start"] <= timedelta(hours=3)
 
-@pending("RN-09 / CA-07", "pipeline.demand_response")
 def test_ca_07_no_incentive_with_8_pct_saving_incentive_with_11_pct():
     from pipeline.demand_response import incentive_applies
 
     assert incentive_applies(savings_pct=0.08) is False
     assert incentive_applies(savings_pct=0.11) is True
 
-@pending("RN-10", "pipeline.demand_response")
 def test_rn_10_customer_participates_in_at_most_8_events_per_month():
     from pipeline.demand_response import can_participate
 
