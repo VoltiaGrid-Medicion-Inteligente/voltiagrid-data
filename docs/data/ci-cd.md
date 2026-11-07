@@ -69,3 +69,24 @@ python -m jobs.quality_checks --run f3-2026-11-02 --lake ../voltiagrid-api/lake
 It prints one line per check (`ok` or `FAIL` with the number of bad rows) and `OK: 21 quality checks passed`, or
 `QUALITY FAILED` with exit code 1. **The pipeline stops on it**: the CI job `pipeline-smoke` runs it after the jobs,
 and a second smoke test writes a negative reading into `filled` by hand and checks that the quality job fails on it.
+
+## 4. Versioned artifacts (T-49.4)
+
+`.github/workflows/release.yml` runs on every merge to `main` (and by hand), after the same checks as a pull request
+(`ci.yml` called as a reusable workflow). **The short commit is the version** of everything it produces:
+
+| Artifact | Where | What it is for |
+|---|---|---|
+| `voltiagrid-pipeline-<commit>.tar.gz` | GitHub Release `pipeline-<commit>` (kept) and the run's artifacts (90 days) | The code Airflow runs: `dags/`, `jobs/`, `pipeline/`, `schemas/`, `data/reference/`, `dev_subset.py`, `requirements.txt` and `VERSION.json` (commit, date, image, pinned versions) |
+| `voltiagrid/spark-jobs:<commit>` | ECR (US-40) | The image the Fargate tasks run; `-var spark_image_tag=<commit>` in voltiagrid-api deploys it |
+
+So a run can always be traced back: the image tag of the Fargate task, the release and the code in Airflow name the
+same commit, and an older version can be installed again from its release.
+
+**Setup (once):** the `voltiagrid-github-deploy` role of voltiagrid-api (US-46, T-46.1) already trusts the `main`
+branch of this repository. In GitHub: **Settings → Secrets and variables → Actions → Variables**, create
+`AWS_DEPLOY_ROLE_ARN` with the role ARN (`terraform -chdir=infra/bootstrap output -raw github_deploy_role_arn` in
+voltiagrid-api).
+
+When the dev stack is down there is no ECR repository: the `image` job says so in a notice and ends green; the
+release is created anyway. Images are pushed once per commit (immutable tags).
