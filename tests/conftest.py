@@ -15,3 +15,7 @@ def spark():
     session = get_spark("voltiagrid-tests", master="local[2]", driver_memory="1g", shuffle_partitions=2, ui=False)
     yield session
     session.stop()
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "smoke: runs the jobs' command lines end to end on a small lake (CI job smoke)")
