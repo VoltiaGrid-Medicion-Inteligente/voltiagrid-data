@@ -1,6 +1,7 @@
-"""Demand-response events per circuit and day (US-43, T-43.1)."""
+"""Demand-response events per circuit and day (US-43, T-43.1) and their participants and notifications (T-43.2)."""
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from jobs.lake import Lake
 
@@ -35,10 +36,30 @@ def write_weather(lake, temps):
     Path(folder, "weather_hourly_darksky.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_inventory(lake):
+    """CT-1: M1 (dynamic), M2 (standard), M3 and M4 of the same dynamic customer; M5 on CT-2 (dynamic).
+    CU-6 is dynamic only from August, so on DAY it is standard."""
+    from jobs.inventory import write_raw
+
+    meters = [("M1", "CU-1", "CT-1"), ("M2", "CU-2", "CT-1"), ("M3", "CU-3", "CT-1"), ("M4", "CU-3", "CT-1"),
+              ("M5", "CU-5", "CT-2"), ("M6", "CU-6", "CT-1")]
+    contracts = [("CU-1", "dynamic", date(2011, 11, 1), None), ("CU-2", "standard", date(2011, 11, 1), None),
+                 ("CU-3", "dynamic", date(2011, 11, 1), None), ("CU-5", "dynamic", date(2011, 11, 1), None),
+                 ("CU-6", "standard", date(2011, 11, 1), date(2013, 7, 31)), ("CU-6", "dynamic", date(2013, 8, 1), None)]
+    write_raw(lake, {
+        "meters": (["meter_id", "customer_code", "transformer_code", "transformer_capacity_kva", "circuit_code",
+                    "circuit_capacity_kva"],
+                   [(m, cu, f"TR-{ct}", Decimal("100"), ct, Decimal("1000")) for m, cu, ct in meters]),
+        "contracts": (["customer_code", "contract_code", "tariff_type", "start_date", "end_date"],
+                      [(cu, f"CT-{cu}-{i}", t, start, end) for i, (cu, t, start, end) in enumerate(contracts)]),
+    }, date(2026, 11, 1))
+
+
 def build_lake(spark, tmp_path, loads, temps):
     lake = Lake.local(str(tmp_path / "lake"))
     write_circuit_load(spark, lake, loads)
     write_weather(lake, temps)
+    write_inventory(lake)
     return lake
 
 
@@ -78,3 +99,33 @@ def test_rerunning_the_day_gives_the_same_events(spark, tmp_path):
     run(spark, lake, [DAY])
     rows = read_events(spark, lake).collect()
     assert [(r.event_id, r.start_ts.time().isoformat()) for r in rows] == [("DR-CT-1-20130722", "18:00:00")]
+
+
+# ---------- T-43.2: participants and notifications ----------
+
+def test_only_dynamic_tariff_customers_of_the_event_circuit_take_part(spark, tmp_path):
+    from jobs.dr_events import read_participants, run
+
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}, "CT-2": {"19:00": 0.5}}, {"19:00": 31.0})
+    run(spark, lake, [DAY])
+    rows = sorted((r.customer_code, r.meter_id) for r in read_participants(spark, lake).collect())
+    assert rows == [("CU-1", "M1"), ("CU-3", "M3"), ("CU-3", "M4")]   # CU-2 standard, CU-5 on CT-2, CU-6 not yet
+
+
+def test_each_participating_customer_gets_one_message_with_the_event_window(spark, tmp_path):
+    from jobs.dr_events import NOTIFICATION_SCHEMA, run
+
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 31.0})
+    run(spark, lake, [DAY])
+    rows = spark.read.schema(NOTIFICATION_SCHEMA).parquet(lake.curated("dr_notifications")).collect()
+    assert sorted(r.customer_code for r in rows) == ["CU-1", "CU-3"]
+    assert {r.channel for r in rows} == {"email"}
+    assert rows[0].message.startswith("Demand-response event on 2013-07-22 from 19:00 to 22:00")
+
+
+def test_a_day_without_events_notifies_nobody(spark, tmp_path):
+    from jobs.dr_events import read_participants, run
+
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 25.0})
+    run(spark, lake, [DAY])
+    assert read_participants(spark, lake).count() == 0

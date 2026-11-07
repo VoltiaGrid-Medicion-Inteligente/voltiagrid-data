@@ -1,4 +1,4 @@
-"""Demand-response events per circuit and day (US-43, T-43.1, RN-08) -> curated dr_events.
+"""Demand-response events per circuit and day (US-43, T-43.1, RN-08) and who is notified (T-43.2).
 
     python -m jobs.dr_events --date 2013-07-22 --lake ../voltiagrid-api/lake
     python -m jobs.dr_events --run f3-2026-11-02 --lake ../voltiagrid-api/lake
@@ -11,7 +11,13 @@ For each circuit and day D:
   event starts.
 Both above their thresholds (pipeline.demand_response, RN-08) -> one event, inside the peak band and 3 hours at most.
 
-Output: curated/dataset=dr_events/date=YYYY-MM-DD/ (a day without events keeps an empty partition with _SUCCESS).
+Participants (T-43.2): the customers of the event circuit whose contract on D has the dynamic tariff (the time-of-use
+customers enrolled in the programme). Each one gets one notification in the outbox, the message a mailer sends.
+
+Output, partitioned by date (a day without events keeps empty partitions with _SUCCESS):
+    curated/dataset=dr_events/          one row per event
+    curated/dataset=dr_participants/    one row per event and customer
+    curated/dataset=dr_notifications/   one row per message to send
 """
 
 import argparse
@@ -21,6 +27,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from jobs.estimate_gaps import as_dates
+from jobs.inventory import read_contracts, read_meters
 from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
 from jobs.spark import get_spark
 from pipeline.demand_response import LOAD_THRESHOLD, PEAK_END, PEAK_START, event_window, needs_event
@@ -28,6 +35,9 @@ from schemas.f2 import F2_SCHEMA
 
 EVENT_SCHEMA = ("event_id string, circuit_code string, start_ts timestamp_ntz, end_ts timestamp_ntz, "
                 "duration_h double, forecast_temp_c double, projected_load_pct double, date date")
+PARTICIPANT_SCHEMA = "event_id string, customer_code string, meter_id string, circuit_code string, date date"
+NOTIFICATION_SCHEMA = "event_id string, customer_code string, channel string, message string, date date"
+PARTICIPATING_TARIFF = "dynamic"
 PROJECTION_DAYS = 7
 CIRCUIT_LOAD_SCHEMA = "circuit_code string, interval_start timestamp_ntz, load_pct double, date date"
 
@@ -39,6 +49,10 @@ def events_path(lake: Lake) -> str:
 def read_events(spark: SparkSession, lake: Lake) -> DataFrame:
     """Explicit schema: a dataset written only on days without events has no parquet file to infer it from."""
     return spark.read.schema(EVENT_SCHEMA).parquet(events_path(lake))
+
+
+def read_participants(spark: SparkSession, lake: Lake) -> DataFrame:
+    return spark.read.schema(PARTICIPANT_SCHEMA).parquet(lake.curated("dr_participants"))
 
 
 def in_peak(ts) -> F.Column:
@@ -79,20 +93,52 @@ def declare_day(spark: SparkSession, projections: list, forecast_temp_c: float |
     return spark.createDataFrame(rows, EVENT_SCHEMA)
 
 
+def participants_of(events: DataFrame, meters: DataFrame, contracts: DataFrame) -> DataFrame:
+    """T-43.2: customers of the event circuit with a dynamic-tariff contract valid on the event day."""
+    valid = (F.col("start_date") <= F.col("date")) & (F.col("end_date").isNull() | (F.col("end_date") >= F.col("date")))
+    return (
+        events.select("event_id", "circuit_code", "date")
+        .join(meters.select("meter_id", "customer_code", "circuit_code"), "circuit_code")
+        .join(contracts.filter(F.col("tariff_type") == PARTICIPATING_TARIFF), "customer_code")
+        .filter(valid)
+        .select("event_id", "customer_code", "meter_id", "circuit_code", "date")
+        .dropDuplicates(["event_id", "customer_code", "meter_id"])
+    )
+
+
+def notifications_for(participants: DataFrame, events: DataFrame) -> DataFrame:
+    """One message per customer and event (a customer with two meters on the circuit gets one)."""
+    message = F.format_string(
+        "Demand-response event on %s from %s to %s: please reduce your consumption. Saving 10%% or more against "
+        "your usual consumption at those hours earns an incentive.",
+        F.date_format("start_ts", "yyyy-MM-dd"), F.date_format("start_ts", "HH:mm"), F.date_format("end_ts", "HH:mm"))
+    return (
+        participants.select("event_id", "customer_code").distinct()
+        .join(events.select("event_id", "start_ts", "end_ts", "date"), "event_id")
+        .select("event_id", "customer_code", F.lit("email").alias("channel"), message.alias("message"), "date")
+    )
+
+
+def _write(spark: SparkSession, df: DataFrame, path: str, days: list[date]) -> None:
+    df.repartition("date").write.mode("overwrite").partitionBy("date").parquet(path)
+    for d in days:
+        write_text(spark, f"{path}/date={d.isoformat()}/_SUCCESS", "")
+
+
 def run(spark: SparkSession, lake: Lake, days: list) -> DataFrame:
     days = as_dates(days)
     circuit_load = spark.read.schema(CIRCUIT_LOAD_SCHEMA).parquet(lake.curated("circuit_load"))
     weather = read_weather(spark, lake)
-    result = spark.createDataFrame([], EVENT_SCHEMA)
+    events = spark.createDataFrame([], EVENT_SCHEMA)
     for day in days:
         projections = projected_peak_load(circuit_load, day).collect()
-        result = result.unionByName(declare_day(spark, projections, peak_forecast(weather, day), day))
-    result = result.localCheckpoint(eager=True)
-    path = events_path(lake)
-    result.repartition("date").write.mode("overwrite").partitionBy("date").parquet(path)
-    for d in days:
-        write_text(spark, f"{path}/date={d.isoformat()}/_SUCCESS", "")
-    return result
+        events = events.unionByName(declare_day(spark, projections, peak_forecast(weather, day), day))
+    events = events.localCheckpoint(eager=True)
+    participants = participants_of(events, read_meters(spark, lake), read_contracts(spark, lake)).localCheckpoint(eager=True)
+    _write(spark, events, events_path(lake), days)
+    _write(spark, participants, lake.curated("dr_participants"), days)
+    _write(spark, notifications_for(participants, events), lake.curated("dr_notifications"), days)
+    return events
 
 
 def main() -> None:
@@ -104,7 +150,9 @@ def main() -> None:
     spark = get_spark("voltiagrid-dr-events")
     days = dates_from_args(spark, args, lake)
     events = run(spark, lake, days).orderBy("date", "circuit_code").collect()
-    print(f"dr_events: {len(events)} events in {len(days)} dates")
+    notified = spark.read.schema(NOTIFICATION_SCHEMA).parquet(lake.curated("dr_notifications")) \
+        .filter(F.col("date").isin(days)).count()
+    print(f"dr_events: {len(events)} events in {len(days)} dates, {notified} customers notified")
     for e in events:
         print(f"  {e.event_id}: {e.start_ts:%H:%M}-{e.end_ts:%H:%M} ({e.duration_h:g} h), "
               f"forecast {e.forecast_temp_c:.1f} °C, projected load {e.projected_load_pct:.1%}")

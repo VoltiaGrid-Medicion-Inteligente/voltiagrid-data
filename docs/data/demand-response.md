@@ -33,3 +33,22 @@ Output: `curated/dataset=dr_events/date=YYYY-MM-DD/`
 
 A day without events keeps an empty partition with `_SUCCESS`, and `read_events` reads the dataset with an explicit
 schema, so the next jobs never fail with `UNABLE_TO_INFER_SCHEMA` on a quiet day.
+
+### 1.1 Participants and notifications (T-43.2)
+
+The customers of the event circuit whose contract valid on the event day has the **dynamic** tariff take part: they
+are the time-of-use customers enrolled in the programme. A customer with the standard tariff is never called.
+
+| Dataset | One row per | Columns |
+|---|---|---|
+| `curated/dataset=dr_participants/` | event and meter | `event_id`, `customer_code`, `meter_id`, `circuit_code`, `date` |
+| `curated/dataset=dr_notifications/` | event and customer | `event_id`, `customer_code`, `channel` (`email`), `message`, `date` |
+
+`dr_notifications` is an **outbox**: the message that a mailer (or SMS gateway) sends, kept in the lake so it can be
+checked and resent. The pilot has no mail service, so sending is out of scope; the outbox is the evidence that each
+participant was told the window in time.
+
+```
+Demand-response event on 2013-07-22 from 19:00 to 22:00: please reduce your consumption. Saving 10% or more against
+your usual consumption at those hours earns an incentive.
+```
