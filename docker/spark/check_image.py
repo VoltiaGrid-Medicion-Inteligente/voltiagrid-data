@@ -4,7 +4,7 @@
     docker run --rm -e CHECK_S3_URI=s3a://<bucket>/_check voltiagrid/spark-jobs:local   # also a write and read on S3
 
 With CHECK_S3_URI it writes 5 rows as Parquet there and reads them back, using the same credentials as the jobs
-(the ECS task role in AWS, or S3_ENDPOINT and AWS_* variables for MinIO in the CI).
+(the ECS task role in AWS, or S3_ENDPOINT and AWS_* variables for the local S3 server in the CI).
 """
 
 import os

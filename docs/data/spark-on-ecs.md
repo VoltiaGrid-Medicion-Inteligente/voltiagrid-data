@@ -26,8 +26,8 @@ task role (T-40.2); on a laptop `AWS_PROFILE` or the `AWS_*` variables. `jobs/sp
 buckets (`AWS_REGION`) and, for an S3-compatible server such as MinIO, `S3_ENDPOINT` with path-style URLs.
 
 **CI.** `.github/workflows/spark-image.yml` builds the image when `docker/spark/`, the jobs or `requirements.txt`
-change, starts a MinIO server, and runs `docker/spark/check_image.py`: Spark writes 5 rows as Parquet to
+change, starts a local S3 server, and runs `docker/spark/check_image.py`: Spark writes 5 rows as Parquet to
 `s3a://voltiagrid-ci/_check` and reads them back. That is the same code path as the lake buckets, without AWS
-credentials in the CI.
+credentials in the CI (MinIO no longer publishes its images on Docker Hub, so the check uses moto.).
 
 The container runs as user `spark` (uid 10001), not root. The jobs only need `/tmp` (Spark's scratch space).
