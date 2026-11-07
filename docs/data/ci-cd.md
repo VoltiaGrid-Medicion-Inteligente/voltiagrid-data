@@ -48,3 +48,24 @@ applies to every DAG of `dags/`, including future ones:
 
 The first run of these checks found two DAGs of sprint 3 (`hello_voltiagrid`, `celery_distribution_check`) without
 owner and without `max_active_runs`; they were fixed in the same pull request.
+
+## 3. Data quality checks (T-49.3)
+
+`jobs/quality_checks.py` checks the lake after a run; the conditions are plain data in `pipeline/quality.py`:
+
+| Dataset | Checks |
+|---|---|
+| every dataset | has rows for the run's dates (or months) |
+| `clean` | `meter_id` and `date` not null; no interval only for an invalid clock; valid energy between 0 and 25 kWh; flagged readings carry no energy |
+| `filled` | meter and interval not null; energy between 0 and 25 kWh; no energy only when the method is `unavailable`; `is_estimated` exactly when there is a method; **48 intervals per meter and day** |
+| `circuit_load` | load and capacity not negative |
+| `fact_consumption` | band and price present; energy and amount not negative; the estimated part never above the total |
+| `billing_status` | estimated share between 0 and 1; billable or inspection order, never both |
+
+```powershell
+python -m jobs.quality_checks --run f3-2026-11-02 --lake ../voltiagrid-api/lake
+```
+
+It prints one line per check (`ok` or `FAIL` with the number of bad rows) and `OK: 21 quality checks passed`, or
+`QUALITY FAILED` with exit code 1. **The pipeline stops on it**: the CI job `pipeline-smoke` runs it after the jobs,
+and a second smoke test writes a negative reading into `filled` by hand and checks that the quality job fails on it.
