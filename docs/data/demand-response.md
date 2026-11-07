@@ -107,3 +107,24 @@ much. If the client sets another rate, only `peak_price` in `jobs/dr_settlement.
 notification. The count reads every participation of the month in the lake and also the days processed earlier in the
 same run, in date order, so running a whole month at once gives the same result as running it day by day. Events of
 the previous month do not count.
+
+## 3. Fact table (US-45)
+
+`jobs/fact_dr_participation.py` turns the settlement into the fact of the dimensional model, with the keys of
+*Analytics layer* (`docs/data/analytics.md`):
+
+```powershell
+python -m jobs.fact_dr_participation --date 2013-07-22 --lake ../voltiagrid-api/lake
+```
+
+| Column | Meaning |
+|---|---|
+| `date_key`, `event_id`, `customer_code`, `circuit_code` | Keys: event day, event, customer (F4), circuit of the event |
+| `baseline_kwh`, `actual_kwh`, `savings_kwh`, `savings_pct` | RN-09 (null without a fair baseline) |
+| `incentive_paid` | 0 or 1 |
+| `incentive_amount` | Money paid, 0 without incentive |
+
+Grain: **one customer in one event**. A customer without a fair baseline keeps its row (it took part) with null
+measures and incentive 0. The job stops with `orphan keys` if an event is not in `dr_events` or a customer is not in F4.
+
+Output: `curated/dataset=fact_dr_participation/date=YYYY-MM-DD/`
