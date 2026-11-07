@@ -63,3 +63,24 @@ check it:
 |---|---|
 | `tests/rules/test_acceptance.py::test_ca_06_event_only_when_both_conditions_and_max_3_hours` | CA-06: 31 °C and 86% declare; one condition alone does not; the event lasts 3 hours at most |
 | `tests/rules/test_rules_match_spark.py::test_ca_06_spark_declares_the_same_events_as_the_rule` | `jobs.dr_events` declares exactly the same circuits and windows as the rule for 12 combinations |
+
+## 2. Settling events (US-44, RN-09 and RN-10)
+
+### 2.1 Baseline (T-44.1)
+
+`jobs/dr_settlement.py`, for every event of the days and every participating customer:
+
+1. **Baseline days** (`pipeline.demand_response.baseline_days`): the last 5 working days (Monday to Friday) before the
+   event on which **that customer** had no event, looking back up to 4 weeks. The pilot has no holiday calendar, so a
+   holiday counts as a working day (open point for the client).
+2. **Baseline energy**: for each of those days, the kWh of the customer's meters in the same clock window as the event
+   (19:00 to 22:00 for an event at those hours), from the filled readings (real and estimated, US-34: a gap must not look
+   like a saving). The baseline is the average of the 5 days.
+3. Fewer than 5 days with readings → `baseline_kwh` is null: there is no fair baseline and the customer is not settled.
+
+```powershell
+python -m jobs.dr_settlement --date 2013-07-22 --lake ../voltiagrid-api/lake
+```
+
+Output: `curated/dataset=dr_settlement/date=YYYY-MM-DD/`, one row per event and customer:
+`event_id`, `customer_code`, `baseline_days`, `baseline_kwh`, `date`.

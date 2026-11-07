@@ -30,3 +30,24 @@ def test_declared_event_keeps_its_inputs():
     event = declare_event(31.5, 0.9, DAY, time(18, 30))
     assert event == {"start": datetime(2013, 7, 22, 18, 30), "end": datetime(2013, 7, 22, 21, 30),
                      "forecast_temp_c": 31.5, "projected_load_pct": 0.9}
+
+
+# ---------- RN-09: baseline (T-44.1) ----------
+
+def test_baseline_is_the_last_5_working_days_without_an_event():
+    from pipeline.demand_response import baseline_days
+
+    assert baseline_days(DAY) == [date(2013, 7, 19), date(2013, 7, 18), date(2013, 7, 17), date(2013, 7, 16),
+                                  date(2013, 7, 15)]
+    with_event = baseline_days(DAY, {date(2013, 7, 17)})
+    assert with_event == [date(2013, 7, 19), date(2013, 7, 18), date(2013, 7, 16), date(2013, 7, 15),
+                          date(2013, 7, 12)]                     # skips the 17th and the weekend
+
+
+def test_baseline_needs_the_5_days():
+    from pipeline.demand_response import baseline_kwh
+
+    days = {date(2013, 7, d): 6.0 for d in (15, 16, 17, 18)}
+    assert baseline_kwh(days) is None
+    days[date(2013, 7, 19)] = 12.0
+    assert baseline_kwh(days) == 7.2

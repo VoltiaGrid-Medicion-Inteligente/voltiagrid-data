@@ -1,5 +1,5 @@
-"""RN-08 (declaring a demand-response event) as plain Python, the same thresholds the Spark job uses.
-Spark: jobs/dr_events.py, which imports `needs_event`, `event_window` and the thresholds.
+"""RN-08 (declaring a demand-response event) and RN-09 (settling it) as plain Python, the rules the Spark jobs use.
+Spark: jobs/dr_events.py (needs_event, event_window) and jobs/dr_settlement.py (baseline_days).
 """
 
 from datetime import date, datetime, time, timedelta
@@ -9,6 +9,8 @@ LOAD_THRESHOLD = 0.85               # ... and projected load above 85% of the ci
 MAX_DURATION = timedelta(hours=3)   # RN-08: an event lasts 3 hours at most ...
 PEAK_START = time(18, 0)            # ... and only inside the peak band (F7: 18:00 to 21:59)
 PEAK_END = time(22, 0)
+BASELINE_DAYS = 5                   # RN-09: the same intervals of the previous 5 working days without an event
+BASELINE_LOOKBACK_DAYS = 28         # how far back to look for them (4 weeks of working days is plenty)
 
 
 def needs_event(forecast_temp_c: float | None, projected_load_pct: float | None) -> bool:
@@ -32,3 +34,28 @@ def declare_event(forecast_temp_c: float | None, projected_load_pct: float | Non
         return None
     start, end = event_window(day or date.today(), overload_from)
     return {"start": start, "end": end, "forecast_temp_c": forecast_temp_c, "projected_load_pct": projected_load_pct}
+
+
+def is_working_day(day: date) -> bool:
+    """Monday to Friday. The pilot has no holiday calendar (an open point for the client)."""
+    return day.weekday() < 5
+
+
+def baseline_days(event_day: date, event_days: set[date] | frozenset = frozenset()) -> list[date]:
+    """RN-09: the last 5 working days before the event on which the customer had no event, most recent first.
+    Fewer than 5 inside the 4-week lookback -> the list is shorter and there is no fair baseline."""
+    days = []
+    for back in range(1, BASELINE_LOOKBACK_DAYS + 1):
+        day = event_day - timedelta(days=back)
+        if is_working_day(day) and day not in event_days:
+            days.append(day)
+            if len(days) == BASELINE_DAYS:
+                break
+    return days
+
+
+def baseline_kwh(kwh_by_day: dict[date, float]) -> float | None:
+    """Average energy of the event intervals over the baseline days; None without the 5 days."""
+    if len(kwh_by_day) < BASELINE_DAYS:
+        return None
+    return sum(kwh_by_day.values()) / len(kwh_by_day)
