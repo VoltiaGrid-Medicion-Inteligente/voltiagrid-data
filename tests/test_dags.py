@@ -200,3 +200,35 @@ def test_local_runtime_is_still_the_default(dagbag):
     from airflow.operators.bash import BashOperator
 
     assert all(isinstance(t, BashOperator) for t in dagbag.dags["voltiagrid_readings"].tasks)
+
+
+# ---------- voltiagrid_history (US-41, T-41.1) ----------
+
+def test_history_goes_from_raw_to_curated_in_order(dagbag):
+    dag = dagbag.dags["voltiagrid_history"]
+    upstream = {name: task.upstream_task_ids for name, task in dag.task_dict.items()}
+    assert upstream["estimate_gaps"] == {"clean_readings"}
+    assert upstream["fact_consumption"] == {"estimate_gaps", "export_inventory"}
+    assert dag.schedule_interval is None and dag.max_active_runs == 1     # only by hand, one at a time
+
+
+def test_history_reads_f1_of_the_upload_date_and_names_the_run_like_the_clean_job(dagbag):
+    dag = dagbag.dags["voltiagrid_history"]
+    values = {"ingest_date": "2026-10-28", "mode": "full"}
+    env = dag.get_template_env()
+    clean = env.from_string(dag.task_dict["clean_readings"].bash_command).render(params=values)
+    assert "python -m jobs.clean_readings --source f1 --ingest-date 2026-10-28 --mode full" in clean
+    estimate = env.from_string(dag.task_dict["estimate_gaps"].bash_command).render(params=values)
+    assert "--run f1-full-2026-10-28 " in estimate
+
+
+def test_on_ecs_the_history_runs_on_spot_with_a_bigger_task(ecs_dagbag):
+    dag = ecs_dagbag.dags["voltiagrid_history"]
+    for task_id in ("clean_readings", "estimate_gaps", "fact_consumption"):
+        task = dag.task_dict[task_id]
+        assert task.capacity_provider_strategy == [{"capacityProvider": "FARGATE_SPOT", "weight": 1}], task_id
+        assert (task.overrides["cpu"], task.overrides["memory"]) == ("8192", "32768")
+        assert task.overrides["ephemeralStorage"] == {"sizeInGiB": 100}
+        assert task.overrides["containerOverrides"][0]["environment"] == [{"name": "SPARK_DRIVER_MEMORY",
+                                                                           "value": "24g"}]
+        assert task.retries >= 2                       # a Spot interruption is retried

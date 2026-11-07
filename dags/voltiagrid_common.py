@@ -48,15 +48,16 @@ def only_if(condition: str | None, command: str, otherwise: str) -> str:
 
 
 def spark_job(task_id: str, args: str, module: str | None = None, capacity: str = "FARGATE",
-              cpu: int | None = None, memory: int | None = None, condition: str | None = None,
-              otherwise: str = "nothing to do"):
+              cpu: int | None = None, memory: int | None = None, storage_gib: int | None = None,
+              condition: str | None = None, otherwise: str = "nothing to do"):
     """A Spark job (`python -m jobs.<module or task_id> <args>`): in the worker, or a Fargate task on the S3 lake.
 
     On ECS the command goes through `sh -c` so the container expands its LAKE_* variables (set in the task
     definition); the operator waits for the task, streams its CloudWatch log into the Airflow log and fails the
     Airflow task if the container exits with an error, so retries work as in local mode. `capacity` is FARGATE
     (on-demand, the daily batches) or FARGATE_SPOT (only the history load, ADR-014); cpu and memory override the
-    size of the task definition for one run. With `condition` (Jinja, e.g. "params.source == 'f3'") the job only
+    size of the task definition for one run (Spark gets 75% of the memory) and storage_gib its disk for Spark's
+    scratch files (21 GiB by default). With `condition` (Jinja, e.g. "params.source == 'f3'") the job only
     runs when it is true; otherwise the task echoes `otherwise` and succeeds."""
     module = module or task_id
     if runtime() != "ecs":
@@ -68,11 +69,15 @@ def spark_job(task_id: str, args: str, module: str | None = None, capacity: str 
     cluster = os.environ["VOLTIA_ECS_CLUSTER"]
     command = only_if(condition, f"python -m jobs.{module} {args} --raw $LAKE_RAW --clean $LAKE_CLEAN "
                                  "--curated $LAKE_CURATED", otherwise)
-    overrides = {"containerOverrides": [{"name": SPARK_CONTAINER, "command": ["sh", "-c", command]}]}
+    container = {"name": SPARK_CONTAINER, "command": ["sh", "-c", command]}
+    overrides = {"containerOverrides": [container]}
     if cpu:
         overrides["cpu"] = str(cpu)
     if memory:
         overrides["memory"] = str(memory)
+        container["environment"] = [{"name": "SPARK_DRIVER_MEMORY", "value": f"{memory * 3 // 4 // 1024}g"}]
+    if storage_gib:
+        overrides["ephemeralStorage"] = {"sizeInGiB": storage_gib}
     return EcsRunTaskOperator(
         task_id=task_id,
         cluster=cluster,
