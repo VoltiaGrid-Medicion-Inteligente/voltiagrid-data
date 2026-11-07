@@ -1,4 +1,4 @@
-"""Demand-response events per circuit and day (US-43, T-43.1, RN-08) and who is notified (T-43.2).
+"""Demand-response events per circuit and day (US-43, T-43.1, RN-08) and who is notified (T-43.2, RN-10).
 
     python -m jobs.dr_events --date 2013-07-22 --lake ../voltiagrid-api/lake
     python -m jobs.dr_events --run f3-2026-11-02 --lake ../voltiagrid-api/lake
@@ -13,6 +13,7 @@ Both above their thresholds (pipeline.demand_response, RN-08) -> one event, insi
 
 Participants (T-43.2): the customers of the event circuit whose contract on D has the dynamic tariff (the time-of-use
 customers enrolled in the programme). Each one gets one notification in the outbox, the message a mailer sends.
+RN-10 (T-44.3): a customer who already took part in 8 events this month is left out of the next ones.
 
 Output, partitioned by date (a day without events keeps empty partitions with _SUCCESS):
     curated/dataset=dr_events/          one row per event
@@ -28,9 +29,11 @@ from pyspark.sql import functions as F
 
 from jobs.estimate_gaps import as_dates
 from jobs.inventory import read_contracts, read_meters
-from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
+from jobs.lake import (Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, path_exists,
+                       write_text)
 from jobs.spark import get_spark
-from pipeline.demand_response import LOAD_THRESHOLD, PEAK_END, PEAK_START, event_window, needs_event
+from pipeline.demand_response import (LOAD_THRESHOLD, MAX_EVENTS_PER_MONTH, PEAK_END, PEAK_START, event_window,
+                                      needs_event)
 from schemas.f2 import F2_SCHEMA
 
 EVENT_SCHEMA = ("event_id string, circuit_code string, start_ts timestamp_ntz, end_ts timestamp_ntz, "
@@ -106,6 +109,15 @@ def participants_of(events: DataFrame, meters: DataFrame, contracts: DataFrame) 
     )
 
 
+def within_monthly_limit(candidates: DataFrame, earlier: DataFrame, day: date) -> DataFrame:
+    """RN-10 (T-44.3): drop the candidates who already took part in 8 events this month before `day`."""
+    taken = (earlier.filter(F.col("date").between(F.lit(day.replace(day=1)), F.lit(day - timedelta(days=1))))
+             .groupBy("customer_code").agg(F.countDistinct("event_id").alias("events_this_month")))
+    return (candidates.join(taken, "customer_code", "left")
+            .filter(F.coalesce("events_this_month", F.lit(0)) < MAX_EVENTS_PER_MONTH)
+            .select(*candidates.columns))
+
+
 def notifications_for(participants: DataFrame, events: DataFrame) -> DataFrame:
     """One message per customer and event (a customer with two meters on the circuit gets one)."""
     message = F.format_string(
@@ -129,12 +141,19 @@ def run(spark: SparkSession, lake: Lake, days: list) -> DataFrame:
     days = as_dates(days)
     circuit_load = spark.read.schema(CIRCUIT_LOAD_SCHEMA).parquet(lake.curated("circuit_load"))
     weather = read_weather(spark, lake)
+    meters, contracts = read_meters(spark, lake), read_contracts(spark, lake)
+    # participations of other days (a rerun of these days replaces their own rows): needed for RN-10
+    earlier = (read_participants(spark, lake).filter(~F.col("date").isin(days))
+               if path_exists(spark, lake.curated("dr_participants")) else spark.createDataFrame([], PARTICIPANT_SCHEMA))
     events = spark.createDataFrame([], EVENT_SCHEMA)
-    for day in days:
+    participants = spark.createDataFrame([], PARTICIPANT_SCHEMA)
+    for day in days:   # in date order: a participation of the 3rd counts for the limit on the 4th
         projections = projected_peak_load(circuit_load, day).collect()
-        events = events.unionByName(declare_day(spark, projections, peak_forecast(weather, day), day))
-    events = events.localCheckpoint(eager=True)
-    participants = participants_of(events, read_meters(spark, lake), read_contracts(spark, lake)).localCheckpoint(eager=True)
+        day_events = declare_day(spark, projections, peak_forecast(weather, day), day)
+        candidates = participants_of(day_events, meters, contracts)
+        allowed = within_monthly_limit(candidates, earlier.unionByName(participants), day)
+        events = events.unionByName(day_events).localCheckpoint(eager=True)
+        participants = participants.unionByName(allowed).localCheckpoint(eager=True)
     _write(spark, events, events_path(lake), days)
     _write(spark, participants, lake.curated("dr_participants"), days)
     _write(spark, notifications_for(participants, events), lake.curated("dr_notifications"), days)

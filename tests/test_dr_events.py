@@ -22,14 +22,14 @@ def write_circuit_load(spark, lake, loads):
         .write.mode("overwrite").partitionBy("date").parquet(lake.curated("circuit_load"))
 
 
-def write_weather(lake, temps):
-    """temps: {"HH:MM": temperature} for D; every other hour of the day is at 20 °C."""
-    folder = f"{lake.raw('f2', 'weather_hourly')}/ingest_date=2026-11-01"
+def write_weather(lake, temps, day=DAY):
+    """temps: {"HH:MM": temperature} for the day; every other hour of it is at 20 °C (one file per day)."""
+    folder = f"{lake.raw('f2', 'weather_hourly')}/ingest_date={day}"
     lines = ["visibility,windBearing,temperature,time,dewPoint,pressure,apparentTemperature,windSpeed,precipType,"
              "icon,humidity,summary"]
     for hour in range(24):
         hh = f"{hour:02d}:00"
-        lines.append(f"10,200,{temps.get(hh, 20.0)},{DAY} {hh}:00,10,1010,20,3,rain,clear-day,0.5,Clear")
+        lines.append(f"10,200,{temps.get(hh, 20.0)},{day} {hh}:00,10,1010,20,3,rain,clear-day,0.5,Clear")
     from pathlib import Path
 
     Path(folder).mkdir(parents=True, exist_ok=True)
@@ -129,3 +129,56 @@ def test_a_day_without_events_notifies_nobody(spark, tmp_path):
     lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 25.0})
     run(spark, lake, [DAY])
     assert read_participants(spark, lake).count() == 0
+
+
+# ---------- T-44.3: RN-10, 8 events a month at most ----------
+
+def write_earlier_participations(spark, lake, counts):
+    """counts: {(customer, "YYYY-MM"): n}, n events on days 1..n of that month (meter M1 for all: only counts matter)."""
+    from jobs.dr_events import PARTICIPANT_SCHEMA
+
+    rows = []
+    for (customer, month), n in counts.items():
+        y, m = map(int, month.split("-"))
+        rows += [(f"DR-OLD-{customer}-{month}-{d}", customer, "M1", "CT-1", date(y, m, d)) for d in range(1, n + 1)]
+    spark.createDataFrame(rows, PARTICIPANT_SCHEMA).write.mode("overwrite").partitionBy("date") \
+        .parquet(lake.curated("dr_participants"))
+
+
+def test_a_customer_with_8_events_this_month_is_left_out(spark, tmp_path):
+    from jobs.dr_events import read_participants, run
+
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 31.0})
+    write_earlier_participations(spark, lake, {("CU-1", "2013-07"): 8, ("CU-3", "2013-07"): 7})
+    run(spark, lake, [DAY])
+    today = {r.customer_code for r in read_participants(spark, lake).filter(f"date = '{DAY}'").collect()}
+    assert today == {"CU-3"}                                   # CU-1 already had 8; CU-3 gets its 8th
+
+
+def test_events_of_last_month_do_not_count(spark, tmp_path):
+    from jobs.dr_events import read_participants, run
+
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 31.0})
+    write_earlier_participations(spark, lake, {("CU-1", "2013-06"): 8})
+    run(spark, lake, [DAY])
+    today = {r.customer_code for r in read_participants(spark, lake).filter(f"date = '{DAY}'").collect()}
+    assert today == {"CU-1", "CU-3"}
+
+
+def test_the_limit_counts_the_days_of_the_same_run_in_order(spark, tmp_path):
+    from jobs.dr_events import read_participants, run
+
+    next_day = DAY + timedelta(days=1)
+    lake = build_lake(spark, tmp_path, {"CT-1": {"19:00": 0.95}}, {"19:00": 31.0})
+    # the same overload one day later (D - 6) and the same heat on D + 1
+    rows = spark.read.parquet(lake.curated("circuit_load")).collect()
+    spark.createDataFrame([(r.circuit_code, r.interval_start + timedelta(days=1), r.load_pct, r.date + timedelta(days=1))
+                           for r in rows], "circuit_code string, interval_start timestamp_ntz, load_pct double, date date") \
+        .write.mode("append").partitionBy("date").parquet(lake.curated("circuit_load"))
+    write_weather(lake, {"19:00": 31.0}, day=next_day)
+    write_earlier_participations(spark, lake, {("CU-3", "2013-07"): 7})
+    run(spark, lake, [DAY, next_day])
+    by_day = {}
+    for r in read_participants(spark, lake).filter(f"date >= '{DAY}'").collect():
+        by_day.setdefault(r.date, set()).add(r.customer_code)
+    assert by_day == {DAY: {"CU-1", "CU-3"}, next_day: {"CU-1"}}   # CU-3 reached 8 on DAY

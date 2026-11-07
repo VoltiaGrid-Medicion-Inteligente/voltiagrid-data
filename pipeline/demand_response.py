@@ -1,5 +1,6 @@
-"""RN-08 (declaring a demand-response event) and RN-09 (settling it) as plain Python, the rules the Spark jobs use.
-Spark: jobs/dr_events.py (needs_event, event_window) and jobs/dr_settlement.py (baseline_days, savings).
+"""RN-08 (declaring a demand-response event), RN-09 (settling it) and RN-10 (monthly limit), the rules the Spark jobs use.
+Spark: jobs/dr_events.py (needs_event, event_window, MAX_EVENTS_PER_MONTH) and jobs/dr_settlement.py
+(baseline_days, INCENTIVE_MIN_SAVING).
 """
 
 from datetime import date, datetime, time, timedelta
@@ -12,6 +13,7 @@ PEAK_END = time(22, 0)
 BASELINE_DAYS = 5                   # RN-09: the same intervals of the previous 5 working days without an event
 BASELINE_LOOKBACK_DAYS = 28         # how far back to look for them (4 weeks of working days is plenty)
 INCENTIVE_MIN_SAVING = 0.10         # RN-09: incentive only with a saving of 10% or more
+MAX_EVENTS_PER_MONTH = 8            # RN-10: a customer takes part in 8 events a month at most
 
 
 def needs_event(forecast_temp_c: float | None, projected_load_pct: float | None) -> bool:
