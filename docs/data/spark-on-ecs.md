@@ -26,8 +26,34 @@ task role (T-40.2); on a laptop `AWS_PROFILE` or the `AWS_*` variables. `jobs/sp
 buckets (`AWS_REGION`) and, for an S3-compatible server such as MinIO, `S3_ENDPOINT` with path-style URLs.
 
 **CI.** `.github/workflows/spark-image.yml` builds the image when `docker/spark/`, the jobs or `requirements.txt`
-change, starts a local S3 server, and runs `docker/spark/check_image.py`: Spark writes 5 rows as Parquet to
+change, starts a local S3 server (moto, installed from PyPI), and runs `docker/spark/check_image.py`: Spark writes 5 rows as Parquet to
 `s3a://voltiagrid-ci/_check` and reads them back. That is the same code path as the lake buckets, without AWS
-credentials in the CI (MinIO no longer publishes its images on Docker Hub, so the check uses moto.).
+credentials in the CI. (MinIO no longer publishes its images on Docker Hub, so the check uses moto.)
 
 The container runs as user `spark` (uid 10001), not root. The jobs only need `/tmp` (Spark's scratch space).
+
+## 2. Airflow starts the jobs on Fargate (US-40, T-40.3)
+
+`dags/voltiagrid_common.py` decides how each task of the DAGs runs, from `VOLTIA_RUNTIME`:
+
+| Task | `local` (default) | `ecs` |
+|---|---|---|
+| Spark jobs (`clean_readings`, `estimate_gaps`, `control_counts`, `circuit_load`, `fact_consumption`, `billing`, `transformer_losses`, `suspicious_meters`) | `python -m jobs.<job> … --lake $VOLTIA_LAKE` in the worker | `EcsRunTaskOperator`: a Fargate task of `voltiagrid-dev-spark-jobs` (on-demand) with `sh -c "python -m jobs.<job> … --raw $LAKE_RAW --clean $LAKE_CLEAN --curated $LAKE_CURATED"` |
+| Pull jobs (`export_inventory`, `fetch_f5`) | in the worker, local lake | in the worker (ADR-014), writing raw in S3 (`--raw $VOLTIA_LAKE_RAW …`) |
+
+On ECS the operator waits for the task, copies its CloudWatch log into the Airflow log of the task, and fails the
+Airflow task if the container exits with an error, so the retries, backoff and 40-minute timeout of the DAG work the
+same as in local mode. The grid, the dependencies and the parameters do not change.
+
+**Try it from the local Airflow** (the dev stack of voltiagrid-api applied, the Spark image published, T-40.2):
+
+1. In `airflow/.env` set `VOLTIA_RUNTIME=ecs` and the values from `terraform -chdir=infra/envs/dev output` in
+   voltiagrid-api (`ecs_cluster`, `spark_task_family`, `public_subnet_ids` joined by commas, `app_security_group_id`)
+   and the three bucket names of the data stack.
+2. `aws sso login --profile voltia-admin` on the laptop: the workers use that session through the mounted `~/.aws`.
+3. `docker compose up -d --build` (the image now has the Amazon provider).
+4. Trigger `voltiagrid_readings` with a date whose raw partition is in S3. In the Grid, the log of a Spark task shows
+   `Starting ECS Task`, the task ARN, the job's own log lines and `ECS Task has been successfully executed`.
+
+`tests/test_dags.py` checks both runtimes: on ECS every Spark task is a Fargate task of the Spark image with the
+cluster, subnets, Security Group and log group given, and its command reads and writes the S3 lake.

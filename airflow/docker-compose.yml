@@ -32,10 +32,23 @@ x-airflow-common: &airflow-common
     F5_URL: http://api-transformer-metering:8005
     SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}
     DATABASE_URL: ${F4_DATABASE_URL:?set F4_DATABASE_URL in .env (the voltiagrid-api database, host db)}
+    # Where the Spark jobs run (US-40): local (default) or ecs (Fargate tasks on the S3 lake; see docs/data/spark-on-ecs.md)
+    VOLTIA_RUNTIME: ${VOLTIA_RUNTIME:-local}
+    VOLTIA_ECS_CLUSTER: ${VOLTIA_ECS_CLUSTER:-}
+    VOLTIA_SPARK_TASK: ${VOLTIA_SPARK_TASK:-}
+    VOLTIA_SUBNETS: ${VOLTIA_SUBNETS:-}
+    VOLTIA_SECURITY_GROUP: ${VOLTIA_SECURITY_GROUP:-}
+    VOLTIA_LAKE_RAW: ${VOLTIA_LAKE_RAW:-}
+    VOLTIA_LAKE_CLEAN: ${VOLTIA_LAKE_CLEAN:-}
+    VOLTIA_LAKE_CURATED: ${VOLTIA_LAKE_CURATED:-}
+    AWS_PROFILE: ${AWS_PROFILE:-}
+    AWS_REGION: ${AWS_REGION:-us-east-1}
   volumes:
     - ../dags:/opt/airflow/dags
     - ..:/opt/voltiagrid:ro
     - ${LAKE_DIR:-../../voltiagrid-api/lake}:/lake
+    # AWS profile of the laptop, only used with VOLTIA_RUNTIME=ecs (aws sso login on the laptop first)
+    - ${AWS_CONFIG_DIR:-~/.aws}:/home/airflow/.aws
     - airflow-logs:/opt/airflow/logs
   networks: [voltia]
   depends_on: &airflow-common-depends-on

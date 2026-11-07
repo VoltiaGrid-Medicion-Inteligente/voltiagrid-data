@@ -13,4 +13,6 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17 \
 
 USER airflow
 # Same versions as requirements.txt. Airflow is pinned in the same command so pip never upgrades or downgrades it.
-RUN pip install --no-cache-dir "apache-airflow==2.10.5" "pyspark==4.2.0" "py4j==0.10.9.9" "boto3>=1.35" "psycopg[binary]>=3.2"
+# The Amazon provider (version of the Airflow 2.10.5 constraints) starts the Spark jobs on ECS Fargate (US-40).
+RUN pip install --no-cache-dir "apache-airflow==2.10.5" "apache-airflow-providers-amazon==9.2.0" "pyspark==4.2.0" \
+    "py4j==0.10.9.9" "boto3>=1.35" "psycopg[binary]>=3.2"
