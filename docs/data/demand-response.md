@@ -99,3 +99,11 @@ Output: `curated/dataset=dr_settlement/date=YYYY-MM-DD/`, one row per event and 
 The rate (one peak price per kWh saved) is the pilot's assumption: the brief fixes when an incentive is paid, not how
 much. If the client sets another rate, only `peak_price` in `jobs/dr_settlement.py` and `incentive_amount` in
 `pipeline/demand_response.py` change.
+
+### 2.3 Eight events a month at most (T-44.3, RN-10)
+
+`jobs/dr_events.py` applies the limit when it picks the participants: a customer who already took part in
+`MAX_EVENTS_PER_MONTH = 8` events in the calendar month (days before the event day) is left out and gets no
+notification. The count reads every participation of the month in the lake and also the days processed earlier in the
+same run, in date order, so running a whole month at once gives the same result as running it day by day. Events of
+the previous month do not count.
