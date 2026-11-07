@@ -31,3 +31,20 @@ job skips it. Locally:
 ```powershell
 python -m pytest -m smoke -v
 ```
+
+## 2. DAG validation (T-49.2)
+
+`tests/test_dag_integrity.py` runs in the CI job `dags` (with Airflow 2.10.5 and the Amazon provider installed) and
+applies to every DAG of `dags/`, including future ones:
+
+| Check | Why |
+|---|---|
+| A DAG file with an import error is reported (a broken file in a temporary folder) | Proves the check really fails instead of skipping the file |
+| No import errors, and every file with `DAG(` defines a DAG | A DAG that does not load disappears from the UI without a sound |
+| No cycles | Airflow refuses a cyclic DAG at run time |
+| Owner `voltiagrid`, tag `voltiagrid`, one run at a time, no catchup | Two runs would overwrite the same partitions; a paused DAG must not start a backlog of runs |
+| Every `python -m jobs.<job>` a task starts (worker or Fargate) is a file of `jobs/` | A renamed job breaks the DAG only at 01:00 otherwise |
+| Each file parses in less than 2 seconds | The scheduler parses every file all the time: no Spark or data at import time |
+
+The first run of these checks found two DAGs of sprint 3 (`hello_voltiagrid`, `celery_distribution_check`) without
+owner and without `max_active_runs`; they were fixed in the same pull request.

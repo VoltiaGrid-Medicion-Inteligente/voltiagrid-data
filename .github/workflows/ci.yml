@@ -46,8 +46,8 @@ jobs:
         run: |
           pip install "apache-airflow[celery,amazon]==2.10.5" pytest \
             --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
-      - name: DAGs load without errors
-        run: python -m pytest tests/test_dags.py -v
+      - name: DAGs load without errors and are valid (US-49)
+        run: python -m pytest tests/test_dags.py tests/test_dag_integrity.py -v
       - name: Airflow compose file is valid
         run: docker compose -f airflow/docker-compose.yml --env-file airflow/.env.example config -q
 

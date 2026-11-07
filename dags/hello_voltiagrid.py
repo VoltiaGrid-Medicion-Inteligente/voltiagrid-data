@@ -14,6 +14,8 @@ with DAG(
     start_date=datetime(2026, 10, 1),  # in the past: a run before start_date gets no tasks
     schedule=None,
     catchup=False,
+    max_active_runs=1,
+    default_args={"owner": "voltiagrid"},   # US-49: every DAG has an owner (test_dag_integrity.py)
     tags=["voltiagrid", "smoke"],
 ) as dag:
     java = BashOperator(task_id="java", bash_command="java -version")
