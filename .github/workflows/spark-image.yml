@@ -1,0 +1,36 @@
+name: spark-image
+
+# The Spark jobs image (US-40, T-40.1) builds, and Spark writes and reads Parquet through S3A on a local S3 server
+# (moto, from PyPI): the same code path as the lake buckets in AWS, without AWS credentials in the CI.
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ["docker/spark/**", "jobs/**", "pipeline/**", "schemas/**", "requirements.txt", ".github/workflows/spark-image.yml"]
+  push:
+    branches: [develop]
+    paths: ["docker/spark/**", "jobs/**", "pipeline/**", "schemas/**", "requirements.txt"]
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f docker/spark/Dockerfile -t voltiagrid/spark-jobs:ci .
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: S3-compatible server (moto) with a bucket
+        run: |
+          pip install "moto[server]==5.2.5" boto3
+          nohup moto_server -H 0.0.0.0 -p 9000 > moto.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/moto-api/ > /dev/null && break; sleep 1; done
+          python -c "import boto3; boto3.client('s3', endpoint_url='http://localhost:9000', region_name='us-east-1', aws_access_key_id='ci', aws_secret_access_key='ci').create_bucket(Bucket='voltiagrid-ci')"
+      - name: Java, Spark, S3A classes and a write and read on S3
+        run: |
+          docker run --rm --network host -e AWS_REGION=us-east-1 -e S3_ENDPOINT=http://localhost:9000 \
+            -e AWS_ACCESS_KEY_ID=ci -e AWS_SECRET_ACCESS_KEY=ci \
+            -e CHECK_S3_URI=s3a://voltiagrid-ci/_check voltiagrid/spark-jobs:ci | tee check.log
+          grep -q "s3 write and read: 5 rows" check.log
+      - name: A job runs with its arguments, as ECS will start it
+        run: docker run --rm voltiagrid/spark-jobs:ci python -m jobs.clean_readings --help
