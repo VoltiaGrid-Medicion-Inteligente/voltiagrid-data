@@ -23,3 +23,12 @@ def event_window(day: date, overload_from: time = PEAK_START) -> tuple[datetime,
     start = datetime.combine(day, max(overload_from, PEAK_START))
     end = min(start + MAX_DURATION, datetime.combine(day, PEAK_END))
     return start, end
+
+
+def declare_event(forecast_temp_c: float | None, projected_load_pct: float | None, day: date | None = None,
+                  overload_from: time = PEAK_START) -> dict | None:
+    """RN-08 / CA-06: the event (start, end and the two inputs) when both conditions hold; None otherwise."""
+    if not needs_event(forecast_temp_c, projected_load_pct):
+        return None
+    start, end = event_window(day or date.today(), overload_from)
+    return {"start": start, "end": end, "forecast_temp_c": forecast_temp_c, "projected_load_pct": projected_load_pct}

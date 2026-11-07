@@ -124,3 +124,27 @@ def test_ca_05_spark_meter_decision_equals_the_rule(spark):
                                     "customer_code string, contract_changed boolean")
     decided = {r.meter_id: r.is_suspicious for r in evaluate_meters(candidates, zero_window, drops, changes).collect()}
     assert decided == {m: is_suspicious_meter(*c) for m, c in cases.items()}
+
+
+# ---------- CA-06: jobs.dr_events ----------
+
+def test_ca_06_spark_declares_the_same_events_as_the_rule(spark):
+    from datetime import date, time
+    from types import SimpleNamespace
+
+    from jobs.dr_events import declare_day
+    from pipeline.demand_response import declare_event
+
+    day = date(2013, 7, 22)
+    cases = {"CT-A": (0.86, datetime(2013, 7, 15, 18, 0)), "CT-B": (0.80, None),
+             "CT-C": (0.95, datetime(2013, 7, 15, 20, 30)), "CT-D": (0.851, datetime(2013, 7, 15, 21, 30))}
+    for temp in (31.0, 30.0, 28.0):
+        projections = [SimpleNamespace(circuit_code=c, projected_load_pct=pct, first_over=first)
+                       for c, (pct, first) in cases.items()]
+        spark_events = {r.circuit_code: (r.start_ts, r.end_ts) for r in declare_day(spark, projections, temp, day).collect()}
+        expected = {}
+        for c, (pct, first) in cases.items():
+            event = declare_event(temp, pct, day, first.time() if first else time(18, 0))
+            if event:
+                expected[c] = (event["start"], event["end"])
+        assert spark_events == expected

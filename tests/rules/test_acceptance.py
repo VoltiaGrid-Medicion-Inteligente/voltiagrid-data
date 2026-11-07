@@ -59,7 +59,6 @@ def test_ca_05_transformer_with_15_pct_loss_for_3_days_is_suspicious_and_meters_
     assert result["is_suspicious"] is True
     assert result["meters_evaluated"] is True
 
-@pending("RN-08 / CA-06", "pipeline.demand_response")
 def test_ca_06_event_only_when_both_conditions_and_max_3_hours():
     from pipeline.demand_response import declare_event
 
