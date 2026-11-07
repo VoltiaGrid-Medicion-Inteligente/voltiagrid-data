@@ -87,6 +87,7 @@ def test_the_daily_pipeline_runs_from_its_command_lines(lake):
     job("jobs.billing", "--run", RUN, lake=lake)
     job("jobs.transformer_losses", "--run", RUN, lake=lake)
     assert "suspicious_meters: " in job("jobs.suspicious_meters", "--run", RUN, lake=lake)
+    assert "OK: 21 quality checks passed" in job("jobs.quality_checks", "--run", RUN, lake=lake)   # T-49.3
 
 
 def test_a_wrong_argument_stops_the_job_with_an_error(lake):
@@ -94,3 +95,20 @@ def test_a_wrong_argument_stops_the_job_with_an_error(lake):
                           cwd=REPO, capture_output=True, text=True, timeout=600)
     assert done.returncode != 0
     assert "run manifest not found" in done.stdout + done.stderr
+
+
+def test_bad_data_stops_the_pipeline(lake, spark):
+    """T-49.3: a negative reading in filled (written by hand, after the run above) makes the quality job fail."""
+    from jobs.estimate_gaps import filled_path
+    from jobs.lake import Lake
+
+    path = filled_path(Lake.local(str(lake)))
+    day = spark.read.parquet(path).filter("date = '2013-03-05'")
+    broken = day.withColumn("energy_kwh", day.energy_kwh * -1).localCheckpoint(eager=True)
+    broken.write.mode("overwrite").partitionBy("date").parquet(path)
+    done = subprocess.run([sys.executable, "-m", "jobs.quality_checks", "--run", RUN, "--lake", str(lake)],
+                          cwd=REPO, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 1
+    failed = [line for line in done.stdout.splitlines() if line.startswith("FAIL")]
+    assert len(failed) == 1 and "filled" in failed[0] and "energy in 0..25 kWh" in failed[0]
+    assert "QUALITY FAILED" in done.stdout
