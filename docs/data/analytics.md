@@ -45,3 +45,22 @@ Output: `curated/dataset=fact_consumption_interval/date=YYYY-MM-DD/` (about 264,
 meters). The monthly `fact_consumption` of US-35 stays: it is the billing aggregate.
 
 Check: the kWh of the fact for a day equal the kWh of the filled readings of that day (same rows, no join loses one).
+
+## 2. fact_transformer_loss_daily (US-51)
+
+One row per **transformer** and **day**. Runs after `jobs.transformer_losses` and reads its two datasets.
+
+```powershell
+python -m jobs.fact_transformer_loss --date 2013-01-15 --lake ../voltiagrid-api/lake
+```
+
+| Column | From |
+|---|---|
+| `date_key`, `transformer_code` | `transformer_losses` |
+| `circuit_code` | F4 |
+| `delivered_kwh`, `metered_kwh`, `estimated_kwh`, `loss_kwh`, `loss_pct` | `transformer_losses` (RN-06) |
+| `consecutive_days_over_12` | Days in a row up to this one with a loss above 12% (0 at or below 12%; a day without a value breaks the count). Looks back 31 days, like RN-06 |
+| `is_suspicious`, `suspicious_rank` | `suspicious_transformers`: 1 and its rank of the day when the transformer is suspicious |
+
+Output: `curated/dataset=fact_transformer_loss_daily/date=YYYY-MM-DD/`. `suspicious_transformers` is read with an
+explicit schema, so a quiet day (no suspicious transformer, only `_SUCCESS`) does not stop the job.
