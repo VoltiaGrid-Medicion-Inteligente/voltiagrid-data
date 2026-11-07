@@ -30,7 +30,7 @@ FACT_COLUMNS = ["customer_code", "band_name", "tariff_valid_from", "price_per_kw
 def monthly_consumption(filled: DataFrame, meters: DataFrame, tariffs: DataFrame) -> DataFrame:
     banded = assign_bands(
         filled.select("meter_id", "interval_start", "energy_kwh", "is_estimated"), tariffs
-    ).join(meters.select("meter_id", "customer_code"), "meter_id")
+    ).join(F.broadcast(meters.select("meter_id", "customer_code")), "meter_id")  # F4 is small (US-42)
     estimated = F.col("is_estimated")
     return (
         banded.withColumn("month", F.date_format("interval_start", "yyyy-MM"))

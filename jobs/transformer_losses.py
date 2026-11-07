@@ -70,7 +70,7 @@ def metered_by_transformer(filled: DataFrame, meters: DataFrame) -> DataFrame:
     Using the filled readings matters: with only real ones, every missing reading would look like stolen energy.
     """
     return (
-        filled.join(meters.select("meter_id", "transformer_code"), "meter_id")
+        filled.join(F.broadcast(meters.select("meter_id", "transformer_code")), "meter_id")  # F4 is small (US-42)
         .groupBy("transformer_code", "interval_start")
         .agg(
             F.sum("energy_kwh").alias("metered_kwh"),

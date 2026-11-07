@@ -28,7 +28,7 @@ def circuit_load(readings: DataFrame, meters: DataFrame) -> DataFrame:
     """readings: clean rows (meter_id, interval_start, energy_kwh, is_valid); meters: F4 meters."""
     valid = readings.filter(F.col("is_valid")).select("meter_id", "interval_start", "energy_kwh")
     per_circuit = (
-        valid.join(meters.select("meter_id", "circuit_code"), "meter_id")
+        valid.join(F.broadcast(meters.select("meter_id", "circuit_code")), "meter_id")  # F4 is small (US-42)
         .groupBy("circuit_code", "interval_start")
         .agg(F.sum("energy_kwh").alias("energy_kwh"), F.countDistinct("meter_id").alias("meters_reporting"))
     )
