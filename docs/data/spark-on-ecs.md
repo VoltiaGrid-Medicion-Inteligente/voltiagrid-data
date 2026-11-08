@@ -82,3 +82,17 @@ docker compose exec airflow-scheduler airflow dags trigger voltiagrid_history -c
 ```
 
 Locally (`VOLTIA_RUNTIME=local`) use `mode=dev`: the 4 dev blocks fit a laptop, the full history does not.
+
+### 3.2 Time and cost of every run (T-41.2)
+
+Both DAGs end with `run_cost` (`trigger_rule = all_done`: it runs even if a job failed). It reads the task instances
+of the run and prints, for `docs/data/cloud-run.md`:
+
+- **Duration**: wall clock of the run and minutes of each task;
+- **Resources**: where each task ran (Fargate on-demand or Spot, vCPU and GB; or the Airflow worker);
+- **Cost**: each Fargate task's minutes × (vCPU × price + GB × price) with the prices in `pipeline/costs.py`
+  (us-east-1, Linux/x86; one minute at least). Worker tasks add nothing: the instance is paid by the hour anyway.
+
+The totals also go to XCom (`wall_seconds`, `task_seconds`, `cost_usd`). Airflow's duration includes starting the
+Fargate task, a little more than Fargate bills, so the cost is an upper bound. CA-09's test checks that
+`docs/data/cloud-run.md` has the Duration, Resources and Cost sections; the numbers are the ones of the real run.
