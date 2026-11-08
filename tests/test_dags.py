@@ -224,16 +224,25 @@ def test_history_reads_f1_of_the_upload_date_and_names_the_run_like_the_clean_jo
     assert "--run f1-full-2026-10-28 " in estimate
 
 
-def test_on_ecs_the_history_runs_on_spot_with_a_bigger_task(ecs_dagbag):
+def test_on_ecs_the_history_runs_on_a_bigger_task(ecs_dagbag):
     dag = ecs_dagbag.dags["voltiagrid_history"]
     for task_id in ("clean_readings", "estimate_gaps", "fact_consumption"):
         task = dag.task_dict[task_id]
-        assert task.capacity_provider_strategy == [{"capacityProvider": "FARGATE_SPOT", "weight": 1}], task_id
-        assert (task.overrides["cpu"], task.overrides["memory"]) == ("8192", "32768")
-        assert task.overrides["ephemeralStorage"] == {"sizeInGiB": 100}
+        assert (task.overrides["cpu"], task.overrides["memory"]) == ("8192", "32768"), task_id
+        assert task.overrides["ephemeralStorage"] == {"sizeInGiB": 100}, task_id
         assert task.overrides["containerOverrides"][0]["environment"] == [{"name": "SPARK_DRIVER_MEMORY",
-                                                                           "value": "24g"}]
-        assert task.retries >= 2                       # a Spot interruption is retried
+                                                                           "value": "24g"}], task_id
+        assert task.retries >= 2, task_id              # a Spot interruption is retried
+
+
+def test_on_ecs_the_history_load_uses_spot_only_for_cleaning(ecs_dagbag):
+    dag = ecs_dagbag.dags["voltiagrid_history"]
+    assert dag.task_dict["clean_readings"].capacity_provider_strategy == [{"capacityProvider": "FARGATE_SPOT",
+                                                                           "weight": 1}]
+    for task_id in ("estimate_gaps", "fact_consumption"):   # on-demand: an interruption lost 2 h 54 min (KAN-356)
+        assert dag.task_dict[task_id].capacity_provider_strategy == [{"capacityProvider": "FARGATE", "weight": 1}], task_id
+        assert dag.task_dict[task_id].execution_timeout.total_seconds() == 8 * 3600, task_id
+        assert dag.task_dict[task_id].waiter_max_attempts * 15 >= 8 * 3600, task_id
 
 
 # ---------- time and cost of every run (T-41.2) ----------
@@ -271,6 +280,8 @@ def test_cost_report_prices_the_fargate_tasks_of_a_run(ecs_dagbag, capsys):
     totals = report_run_cost(dag_run=Run(), dag=dag, task=dag.task_dict["run_cost"])
     assert totals["wall_seconds"] == 100 * 60
     assert totals["task_seconds"] == 101 * 60
-    assert totals["cost_usd"] == round(100 / 60 * (8 * 0.0127 + 32 * 0.0014), 4)    # 100 min of Spot 8 vCPU / 32 GB
+    spot, on_demand = 8 * 0.0127 + 32 * 0.0014, 8 * 0.04048 + 32 * 0.004445
+    # clean_readings: 60 min on Spot; estimate_gaps and fact_consumption: 40 min on-demand (KAN-356)
+    assert totals["cost_usd"] == round(60 / 60 * spot + 40 / 60 * on_demand, 4)
     out = capsys.readouterr().out
     assert "## Duration" in out and "| `export_inventory` | Airflow worker | — | — |" in out

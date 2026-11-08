@@ -24,6 +24,10 @@ from voltiagrid_common import run_cost_task, spark_job, worker_job
 
 RUN = "f1-{{ params.mode }}-{{ params.ingest_date }}"   # same name as jobs.clean_readings.run_id
 HISTORY_TASK = {"capacity": "FARGATE_SPOT", "cpu": 8192, "memory": 32768, "storage_gib": 100}
+# estimate_gaps and fact_consumption run on on-demand: a Spot interruption in the middle of them lost 2 h 54 min of work
+# (the run of 2026-11-08, exit 137), and a retry starts from scratch. Same size, no interruptions.
+ON_DEMAND_TASK = {**HISTORY_TASK, "capacity": "FARGATE"}
+LONG_TIMEOUT = timedelta(hours=8)
 
 default_args = {
     "owner": "voltiagrid",
@@ -51,9 +55,13 @@ with DAG(
 ) as dag:
     clean = spark_job("clean_readings", "--source f1 --ingest-date {{ params.ingest_date }} --mode {{ params.mode }}",
                       **HISTORY_TASK)
-    estimate = spark_job("estimate_gaps", f"--run {RUN}", **HISTORY_TASK)
+    estimate = spark_job("estimate_gaps", f"--run {RUN}", **ON_DEMAND_TASK)
     inventory = worker_job("export_inventory", "python -m jobs.inventory export")
-    consumption = spark_job("fact_consumption", f"--run {RUN}", **HISTORY_TASK)
+    consumption = spark_job("fact_consumption", f"--run {RUN}", **ON_DEMAND_TASK)
+    for long_task in (estimate, consumption):   # estimate_gaps did not finish in 2 h 54 min: give both 8 hours
+        long_task.execution_timeout = LONG_TIMEOUT
+        if hasattr(long_task, "waiter_max_attempts"):            # ECS: keep polling as long as the timeout allows
+            long_task.waiter_max_attempts = int(LONG_TIMEOUT.total_seconds() // 15)
 
     cost = run_cost_task()      # time, resources and cost of the run (T-41.2, CA-09)
 
