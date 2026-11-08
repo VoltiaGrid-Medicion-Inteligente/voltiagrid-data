@@ -96,3 +96,24 @@ of the run and prints, for `docs/data/cloud-run.md`:
 The totals also go to XCom (`wall_seconds`, `task_seconds`, `cost_usd`). Airflow's duration includes starting the
 Fargate task, a little more than Fargate bills, so the cost is an upper bound. CA-09's test checks that
 `docs/data/cloud-run.md` has the Duration, Resources and Cost sections; the numbers are the ones of the real run.
+
+### 3.3 Control counts between layers (T-41.3)
+
+`jobs/layer_counts.py` checks one cleaning run from raw to curated:
+
+| Step | Must hold |
+|---|---|
+| raw → clean | every meter-interval of raw (valid clock) is in clean exactly once (`lost = 0`, `duplicated = 0`, the CA-08 check) |
+| clean → filled | `filled_real` = `clean_valid`: every valid reading kept as a real reading; the rest of filled is estimated |
+| filled → curated | in the run's months, the intervals and kWh of `fact_consumption` equal the filled ones of the meters F4 has (kWh within 0.01%, the monthly fact rounds to 4 decimals) |
+
+`meters_without_f4` counts the meters with readings that F4 does not have: they cannot be billed, so they are
+reported and left out of the comparison. It prints one line per count and `OK: raw, clean, filled and curated
+agree`, or `CHECK FAILED` with the reason and exit code 1.
+
+```powershell
+python -m jobs.layer_counts --run f1-full-2026-10-28 --raw s3a://<raw bucket> --clean s3a://<clean bucket> --curated s3a://<curated bucket>
+.\infra\scripts\run-spark.ps1 -Job layer_counts -JobArgs "--run f1-full-2026-10-28"      # from voltiagrid-api, on Fargate
+```
+
+The output goes into *Control counts between layers* of `docs/data/cloud-run.md`.
