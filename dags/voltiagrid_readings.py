@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.models.param import Param
-from voltiagrid_common import spark_job, worker_job
+from voltiagrid_common import run_cost_task, spark_job, worker_job
 
 INGEST_DATE = "{{ params.date or ds }}"
 # name of the cleaning run manifest (clean/.../_runs/<run>.json), as jobs.clean_readings.run_id builds it
@@ -77,3 +77,6 @@ with DAG(
     [inventory, estimate] >> circuits
     [inventory, estimate] >> consumption >> bills
     [inventory, estimate, f5] >> losses >> meters
+
+    cost = run_cost_task()      # time, resources and cost of every run (US-40, T-41.2)
+    [control, circuits, bills, meters] >> cost

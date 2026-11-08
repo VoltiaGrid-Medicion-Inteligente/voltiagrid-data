@@ -61,6 +61,8 @@ def test_readings_dag_cleans_first_then_estimates_and_checks_control_counts(dagb
 def test_every_pipeline_task_retries_with_backoff_and_has_a_timeout(dagbag):
     dag = dagbag.dags["voltiagrid_readings"]
     for task in dag.tasks:
+        if task.task_id == "run_cost":   # only reports; nothing to retry
+            continue
         assert task.retries >= 2, task.task_id
         assert task.retry_exponential_backoff, task.task_id
         assert task.execution_timeout is not None, task.task_id
@@ -199,7 +201,7 @@ def test_on_ecs_pull_jobs_stay_in_the_worker_and_write_raw_in_s3(ecs_dagbag):
 def test_local_runtime_is_still_the_default(dagbag):
     from airflow.operators.bash import BashOperator
 
-    assert all(isinstance(t, BashOperator) for t in dagbag.dags["voltiagrid_readings"].tasks)
+    assert all(isinstance(t, BashOperator) for t in dagbag.dags["voltiagrid_readings"].tasks if t.task_id != "run_cost")
 
 
 # ---------- voltiagrid_history (US-41, T-41.1) ----------
@@ -232,3 +234,43 @@ def test_on_ecs_the_history_runs_on_spot_with_a_bigger_task(ecs_dagbag):
         assert task.overrides["containerOverrides"][0]["environment"] == [{"name": "SPARK_DRIVER_MEMORY",
                                                                            "value": "24g"}]
         assert task.retries >= 2                       # a Spot interruption is retried
+
+
+# ---------- time and cost of every run (T-41.2) ----------
+
+def test_both_dags_end_with_the_cost_report_even_if_a_job_fails(dagbag):
+    for dag_id in ("voltiagrid_readings", "voltiagrid_history"):
+        dag = dagbag.dags[dag_id]
+        cost = dag.task_dict["run_cost"]
+        assert cost.trigger_rule == "all_done", dag_id
+        assert cost.downstream_task_ids == set(), dag_id
+        assert {t.task_id for t in dag.tasks if not t.downstream_task_ids} == {"run_cost"}, dag_id
+
+
+def test_cost_report_prices_the_fargate_tasks_of_a_run(ecs_dagbag, capsys):
+    from datetime import datetime, timedelta, timezone
+
+    from voltiagrid_common import report_run_cost
+
+    dag = ecs_dagbag.dags["voltiagrid_history"]
+    t0 = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)
+
+    class TI:
+        def __init__(self, task_id, minutes, offset):
+            self.task_id, self.duration = task_id, minutes * 60
+            self.start_date = t0 + timedelta(minutes=offset)
+            self.end_date = self.start_date + timedelta(minutes=minutes)
+
+    class Run:
+        run_id = "manual__2026-11-10"
+
+        def get_task_instances(self):
+            return [TI("clean_readings", 60, 0), TI("export_inventory", 1, 0), TI("estimate_gaps", 30, 60),
+                    TI("fact_consumption", 10, 90), TI("run_cost", 0, 100)]
+
+    totals = report_run_cost(dag_run=Run(), dag=dag, task=dag.task_dict["run_cost"])
+    assert totals["wall_seconds"] == 100 * 60
+    assert totals["task_seconds"] == 101 * 60
+    assert totals["cost_usd"] == round(100 / 60 * (8 * 0.0127 + 32 * 0.0014), 4)    # 100 min of Spot 8 vCPU / 32 GB
+    out = capsys.readouterr().out
+    assert "## Duration" in out and "| `export_inventory` | Airflow worker | — | — |" in out

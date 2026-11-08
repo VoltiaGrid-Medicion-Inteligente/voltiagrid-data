@@ -95,3 +95,43 @@ def spark_job(task_id: str, args: str, module: str | None = None, capacity: str 
         waiter_delay=15,
         waiter_max_attempts=4 * 60 * 6,   # 6 hours: the history load is long; execution_timeout ends it before
     )
+
+
+def _task_rows(dag_run, dag, skip: str) -> list[dict]:
+    """What each task of the run took and where it ran (Fargate size and capacity from the operator)."""
+    rows = []
+    for ti in dag_run.get_task_instances():
+        if ti.task_id == skip or ti.duration is None:
+            continue
+        task = dag.get_task(ti.task_id)
+        overrides = getattr(task, "overrides", None)
+        if overrides is not None:     # EcsRunTaskOperator
+            rows.append({"task_id": ti.task_id, "seconds": ti.duration, "where": "fargate",
+                         "cpu": int(overrides.get("cpu", os.getenv("VOLTIA_SPARK_CPU", "2048"))),
+                         "memory": int(overrides.get("memory", os.getenv("VOLTIA_SPARK_MEMORY", "8192"))),
+                         "capacity": task.capacity_provider_strategy[0]["capacityProvider"]})
+        else:
+            rows.append({"task_id": ti.task_id, "seconds": ti.duration, "where": "worker", "cpu": 0, "memory": 0,
+                         "capacity": ""})
+    return sorted(rows, key=lambda r: r["task_id"])
+
+
+def report_run_cost(dag_run=None, dag=None, task=None, **_):
+    """Time, resources and cost of the run (T-41.2): logs the markdown of docs/data/cloud-run.md and returns the
+    totals (XCom). Fargate time is the Airflow duration of each task, from its start to the end of the ECS task: a
+    little more than what Fargate bills, so the cost is an upper bound."""
+    from pipeline.costs import markdown, summarize
+
+    summary = summarize(_task_rows(dag_run, dag, skip=task.task_id))
+    started = min((ti.start_date for ti in dag_run.get_task_instances() if ti.start_date), default=None)
+    ended = max((ti.end_date for ti in dag_run.get_task_instances() if ti.end_date), default=None)
+    wall = (ended - started).total_seconds() if started and ended else summary["task_seconds"]
+    print(markdown(summary, dag_run.run_id, wall))
+    return {"wall_seconds": wall, "task_seconds": summary["task_seconds"], "cost_usd": round(summary["cost"], 4)}
+
+
+def run_cost_task():
+    """Last task of a DAG: runs even if a job failed (trigger_rule all_done), so a failed run also shows its cost."""
+    from airflow.operators.python import PythonOperator
+
+    return PythonOperator(task_id="run_cost", python_callable=report_run_cost, trigger_rule="all_done", retries=0)
