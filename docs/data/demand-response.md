@@ -120,6 +120,18 @@ rules as the brief states them. Four tests check them:
 | `test_rules_match_spark.py::test_ca_07_spark_pays_the_incentive_to_the_same_savings_as_the_rule` | `jobs.dr_settlement` pays exactly the customers the rule pays (8%, 10%, 11% and a negative saving) |
 | `test_rules_match_spark.py::test_rn_10_spark_lets_in_the_same_customers_as_the_rule` | `jobs.dr_events` lets in exactly the customers the rule allows, for 0 to 9 earlier events |
 
+### 2.5 Publishing to the API (T-44.4)
+
+The customer sees their events in the customer consumption API (`GET /me/events`, voltiagrid-api), which reads the
+table `dr_participation` of the operational database. `jobs/publish_dr.py` copies there the settlement of the days
+given, with the event window, replacing those days in one transaction:
+
+```powershell
+python -m jobs.publish_dr --date 2013-07-22 --lake ../voltiagrid-api/lake    # DATABASE_URL as for jobs.inventory
+```
+
+Order for one day: `circuit_load` (of D − 7) → `dr_events` → `estimate_gaps` → `dr_settlement` → `publish_dr`.
+
 ## 3. Fact table (US-45)
 
 `jobs/fact_dr_participation.py` turns the settlement into the fact of the dimensional model, with the keys of
