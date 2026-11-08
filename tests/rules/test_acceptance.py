@@ -87,7 +87,6 @@ def test_ca_08_24h_resend_of_1000_meters_without_loss_or_duplicates():
     assert report["expected"] == 1000 * 48
     assert report["lost"] == 0 and report["duplicated"] == 0
 
-@pending("CA-09", "docs/data/cloud-run.md")
 def test_ca_09_full_f1_history_processed_in_cloud_with_time_resources_and_cost():
     from pathlib import Path
 

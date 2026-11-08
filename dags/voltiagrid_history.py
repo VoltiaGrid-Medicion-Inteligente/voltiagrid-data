@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.models.param import Param
-from voltiagrid_common import spark_job, worker_job
+from voltiagrid_common import run_cost_task, spark_job, worker_job
 
 RUN = "f1-{{ params.mode }}-{{ params.ingest_date }}"   # same name as jobs.clean_readings.run_id
 HISTORY_TASK = {"capacity": "FARGATE_SPOT", "cpu": 8192, "memory": 32768, "storage_gib": 100}
@@ -55,5 +55,8 @@ with DAG(
     inventory = worker_job("export_inventory", "python -m jobs.inventory export")
     consumption = spark_job("fact_consumption", f"--run {RUN}", **HISTORY_TASK)
 
+    cost = run_cost_task()      # time, resources and cost of the run (T-41.2, CA-09)
+
     clean >> estimate
     [estimate, inventory] >> consumption
+    [clean, estimate, inventory, consumption] >> cost
