@@ -70,17 +70,23 @@ def interpolate(grid: DataFrame) -> DataFrame:
 
     Gaps-and-islands with windows: for each interval, the position and value of the last valid reading before it
     and the first after it. Gap length = next position - previous position - 1.
+
+    Both lookups use a running frame (start of the partition to the current row), which Spark evaluates in one pass.
+    The "first valid reading after" is the "last valid reading before" in descending time order. A frame that ends
+    at unboundedFollowing would be recomputed for every row (O(n^2) per meter): on the F1 history, about 40 000
+    intervals per meter, that turned this step into hours (KAN-356).
     """
-    by_meter = Window.partitionBy("meter_id").orderBy("interval_start")
-    before = by_meter.rowsBetween(Window.unboundedPreceding, 0)
-    after = by_meter.rowsBetween(0, Window.unboundedFollowing)
+    forward = Window.partitionBy("meter_id").orderBy("interval_start")
+    backward = Window.partitionBy("meter_id").orderBy(F.col("interval_start").desc())
+    before = forward.rowsBetween(Window.unboundedPreceding, 0)
+    after = backward.rowsBetween(Window.unboundedPreceding, 0)
     has_value = F.col("actual_kwh").isNotNull()
     positioned = (
-        grid.withColumn("_pos", F.row_number().over(by_meter))
+        grid.withColumn("_pos", F.row_number().over(forward))
         .withColumn("_prev_pos", F.last(F.when(has_value, F.col("_pos")), ignorenulls=True).over(before))
         .withColumn("_prev_kwh", F.last("actual_kwh", ignorenulls=True).over(before))
-        .withColumn("_next_pos", F.first(F.when(has_value, F.col("_pos")), ignorenulls=True).over(after))
-        .withColumn("_next_kwh", F.first("actual_kwh", ignorenulls=True).over(after))
+        .withColumn("_next_pos", F.last(F.when(has_value, F.col("_pos")), ignorenulls=True).over(after))
+        .withColumn("_next_kwh", F.last("actual_kwh", ignorenulls=True).over(after))
     )
     gap_length = F.col("_next_pos") - F.col("_prev_pos") - 1
     line = F.col("_prev_kwh") + (F.col("_next_kwh") - F.col("_prev_kwh")) * (
