@@ -1,4 +1,4 @@
-"""Control queries (CT-10): the answers of questions 1, 2, 3, 4 and 6 on a small lake whose answers are known."""
+"""Control queries (CT-10): the answers of questions 1 to 6 on a small lake whose answers are known."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 
 from jobs.control_queries import (month_bounds, q1_consumption_by_band, q2_transformer_losses,
-                                  q3_estimated_readings, q4_dr_savings, q6_customers_not_billed)
+                                  q3_estimated_readings, q4_dr_savings, q5_temperature_and_peak_load,
+                                  q6_customers_not_billed)
 from jobs.inventory import write_raw
 from jobs.lake import Lake
 
@@ -28,6 +29,8 @@ FILLED_COLUMNS = "meter_id string, interval_start timestamp_ntz, energy_kwh doub
 ORDER_COLUMNS = ("order_id string, customer_code string, month string, reason string, percentage double, "
                  "created_at timestamp_ntz")
 STATUS_COLUMNS = "customer_code string, month string, estimated_pct double, is_billable boolean, inspection_order string"
+LOAD_WEATHER_COLUMNS = ("date_key int, hour int, transformer_code string, circuit_code string, delivered_kwh double, "
+                        "peak_kw double, load_pct_capacity double, temperature_c double, date date")
 
 
 def build_lake(spark, tmp_path):
@@ -84,6 +87,15 @@ def build_lake(spark, tmp_path):
         ("C-2", "2013-01", 0.25, False, "IO-2013-01-C-2"),
     ], STATUS_COLUMNS)
     status.write.mode("overwrite").partitionBy("month").parquet(lake.curated("billing_status"))
+
+    load_weather = spark.createDataFrame([
+        (20130101, 0, "TR-1", "CI-1", 2.5, 10.0, 0.1, 0.0, date(2013, 1, 1)),
+        (20130101, 1, "TR-1", "CI-1", 5.0, 20.0, 0.2, 5.0, date(2013, 1, 1)),
+        (20130102, 0, "TR-1", "CI-1", 7.5, 30.0, 0.3, 10.0, date(2013, 1, 2)),
+        (20130102, 1, "TR-2", "CI-1", 11.0, 45.0, 0.9, None, date(2013, 1, 2)),     # F2 has no reading for this hour
+        (20130201, 0, "TR-1", "CI-1", 25.0, 99.0, 0.99, 20.0, date(2013, 2, 1)),   # February: not in January
+    ], LOAD_WEATHER_COLUMNS)
+    load_weather.write.mode("overwrite").partitionBy("date").parquet(lake.curated("fact_load_weather_hourly"))
     return lake
 
 
@@ -129,6 +141,23 @@ def test_q4_savings_and_incentive_cost_per_event(spark, tmp_path):
     assert event["savings_kwh"] == 5.0
     assert event["customers_paid"] == 1
     assert event["incentive_cost"] == Decimal("1.50")
+
+
+def test_q5_peak_load_and_correlation_of_the_month(spark, tmp_path):
+    lake = build_lake(spark, tmp_path)
+    by_day, totals = q5_temperature_and_peak_load(spark, lake, "2013-01")
+    assert totals["rows"] == 4                    # February is not in January
+    assert totals["peak_load_pct"] == 0.9         # the hour without temperature still counts for the peak
+    assert totals["correlation"] == 1.0           # but not for the correlation: load grows with temperature
+    days = {r["date"]: (r["peak_load_pct"], r["max_temp_c"], r["avg_temp_c"]) for r in by_day.collect()}
+    assert days == {date(2013, 1, 1): (0.2, 5.0, 2.5), date(2013, 1, 2): (0.9, 10.0, 10.0)}
+
+
+def test_q5_month_without_rows_has_no_peak(spark, tmp_path):
+    lake = build_lake(spark, tmp_path)
+    by_day, totals = q5_temperature_and_peak_load(spark, lake, "2013-03")
+    assert totals == {"rows": 0, "peak_load_pct": None, "correlation": None}
+    assert by_day.count() == 0
 
 
 def test_q6_inspection_orders_agree_with_the_billing_status(spark, tmp_path):
