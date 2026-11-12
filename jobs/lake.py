@@ -74,6 +74,19 @@ def path_exists(spark, path: str) -> bool:
     return fs.exists(hadoop_path)
 
 
+def delete_partitions(spark, path: str, column: str, values) -> None:
+    """Remove the given partition folders before an overwrite.
+
+    With dynamic partition overwrite Spark only replaces the partitions present in the new data. A day whose new
+    result is empty (no suspicious transformer any more) would keep the old partition, so the jobs that can produce an
+    empty day clear its folder first.
+    """
+    for value in values:
+        fs, hadoop_path = _filesystem(spark, f"{path}/{column}={value}")
+        if fs.exists(hadoop_path):
+            fs.delete(hadoop_path, True)
+
+
 def write_text(spark, path: str, text: str) -> None:
     fs, hadoop_path = _filesystem(spark, path)
     stream = fs.create(hadoop_path, True)

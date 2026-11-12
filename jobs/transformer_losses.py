@@ -19,7 +19,8 @@ from pyspark.sql import functions as F
 
 from jobs.estimate_gaps import as_dates, filled_path
 from jobs.inventory import read_meters
-from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
+from jobs.lake import (Lake, add_date_arguments, add_lake_arguments, dates_from_args, delete_partitions, lake_from_args,
+                       write_text)
 from jobs.readings import parse_utc
 from jobs.spark import get_spark
 from pipeline.losses import CONSECUTIVE_DAYS, LOSS_THRESHOLD  # RN-06, shared with the rule
@@ -134,6 +135,7 @@ def suspicious_path(lake: Lake) -> str:
 
 
 def _write_by_date(spark: SparkSession, df: DataFrame, path: str, days: list[date]) -> None:
+    delete_partitions(spark, path, "date", [d.isoformat() for d in days])
     df.repartition("date").write.mode("overwrite").partitionBy("date").parquet(path)
     for d in days:
         write_text(spark, f"{path}/date={d.isoformat()}/_SUCCESS", "")
