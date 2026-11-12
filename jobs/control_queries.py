@@ -2,14 +2,15 @@
 
     python -m jobs.control_queries --question 2 --lake ../voltiagrid-api/lake --top 10
     python -m jobs.control_queries --question 3 --month 2013-01 --lake ../voltiagrid-api/lake --out control/q3
+    python -m jobs.control_queries --question 5 --month 2013-01 --lake ../voltiagrid-api/lake
 
 The queries follow docs/data/business-questions-matrix.md, with natural keys: the dimensions of jobs/dimensions.py have
 no surrogate keys (band_key, customer_key, event_key), so transformer_code, customer_code, band_name and event_id join
 the facts directly.
 
 Question 1 has no ACORN group: dim_customer.acorn_group is not in F4 yet (open point of the dimensional model), so the
-query returns band and tariff type only. Question 5 is not here: fact_load_weather_hourly needs a temperature source
-the lake does not have (US-53, KAN-313).
+query returns band and tariff type only. Question 5 reads fact_load_weather_hourly (US-53, KAN-313), whose temperature
+comes from F2.
 """
 
 import argparse
@@ -86,6 +87,27 @@ def q4_dr_savings(spark: SparkSession, lake: Lake) -> DataFrame:
             .orderBy("event_id"))
 
 
+def q5_temperature_and_peak_load(spark: SparkSession, lake: Lake, month: str) -> tuple[DataFrame, dict]:
+    """Q5: temperature and peak load in one month. Returns the matrix query (highest load % of capacity and highest
+    temperature per day) and the numbers of the page over the month's hourly rows: how many rows, the highest load %
+    of capacity and the correlation between temperature and load % (Pearson, only hours that have a temperature)."""
+    first, last = month_bounds(month)
+    facts = spark.read.parquet(lake.curated("fact_load_weather_hourly")) \
+        .filter(F.col("date").between(F.lit(first), F.lit(last)))
+    by_day = (facts.groupBy("date")
+              .agg(F.round(F.max("load_pct_capacity"), 4).alias("peak_load_pct"),
+                   F.max("temperature_c").alias("max_temp_c"),
+                   F.round(F.avg("temperature_c"), 2).alias("avg_temp_c"))
+              .orderBy("date"))
+    rows, peak = facts.agg(F.count("*"), F.max("load_pct_capacity")).first()
+    corr = facts.filter(F.col("temperature_c").isNotNull()) \
+        .agg(F.corr("temperature_c", "load_pct_capacity")).first()[0]
+    totals = {"rows": rows,
+              "peak_load_pct": None if peak is None else round(peak, 4),
+              "correlation": None if corr is None else round(corr, 3)}
+    return by_day, totals
+
+
 def q6_customers_not_billed(spark: SparkSession, lake: Lake, month: str) -> tuple[DataFrame, int, int]:
     """Q6: customers left out of automatic billing in one month, by reason. Returns the table by reason and the two
     counts that must agree: inspection orders, and billing_status rows with is_billable = false."""
@@ -98,8 +120,8 @@ def q6_customers_not_billed(spark: SparkSession, lake: Lake, month: str) -> tupl
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_lake_arguments(p)
-    p.add_argument("--question", type=int, required=True, choices=[1, 2, 3, 4, 6])
-    p.add_argument("--month", help="YYYY-MM, for questions 1, 3 and 6")
+    p.add_argument("--question", type=int, required=True, choices=[1, 2, 3, 4, 5, 6])
+    p.add_argument("--month", help="YYYY-MM, for questions 1, 3, 5 and 6")
     p.add_argument("--top", type=int, default=10, help="for question 2")
     p.add_argument("--out", help="folder for a CSV with the result (optional)")
     args = p.parse_args()
@@ -114,6 +136,10 @@ def main() -> None:
         result = q3_estimated_readings(spark, lake, args.month)
     elif args.question == 4:
         result = q4_dr_savings(spark, lake)
+    elif args.question == 5:
+        result, totals = q5_temperature_and_peak_load(spark, lake, args.month)
+        print(f"question 5, {args.month}: {totals['rows']} rows, highest load {totals['peak_load_pct']} of capacity, "
+              f"correlation temperature-load {totals['correlation']}")
     else:
         result, orders, not_billable = q6_customers_not_billed(spark, lake, args.month)
         if orders != not_billable:
