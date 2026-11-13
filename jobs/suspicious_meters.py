@@ -17,7 +17,8 @@ from pyspark.sql import functions as F
 
 from jobs.estimate_gaps import as_dates, filled_path
 from jobs.inventory import read_contracts, read_meters
-from jobs.lake import Lake, add_date_arguments, add_lake_arguments, dates_from_args, lake_from_args, write_text
+from jobs.lake import (Lake, add_date_arguments, add_lake_arguments, dates_from_args, delete_partitions, lake_from_args,
+                       write_text)
 from jobs.spark import get_spark
 from jobs.transformer_losses import suspicious_path
 from pipeline.losses import DROP_THRESHOLD, ZERO_STREAK_INTERVALS  # RN-07, shared with the rule
@@ -136,6 +137,7 @@ def run(spark: SparkSession, lake: Lake, days: list) -> DataFrame:
         result = part if result is None else result.unionByName(part)
     path = lake.curated("suspicious_meters")
     result = result.localCheckpoint(eager=True)
+    delete_partitions(spark, path, "date", [d.isoformat() for d in days])
     result.repartition("date").write.mode("overwrite").partitionBy("date").parquet(path)
     for d in days:
         write_text(spark, f"{path}/date={d.isoformat()}/_SUCCESS", "")
